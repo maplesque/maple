@@ -1,0 +1,22 @@
+[package]
+name = "maple"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+image = "0.25"
+gif = "0.13"
+zip = { version = "2.1", features = ["deflate"] }
+eyre = "0.6"
+color-eyre = "0.6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+delaunator = "1.0"
+ab_glyph = "0.2"
+imageproc = "0.25"
+
+[[bin]]
+name = "maple"
+path = "src/main.rs"
