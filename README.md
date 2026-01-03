@@ -1,6 +1,8 @@
-# 🍁 Maple
+<img width="1300" height="500" alt="image" src="https://github.com/user-attachments/assets/df818959-85a3-4cb9-ae9f-08f18ef49684" />
 
-Composite images/text into animated templates. `templates/` has some fun ones to try!
+---
+
+maple allows you to composite images/text with templates into animated GIFs/Videos. `templates/` has some fun ones to try!
 
 ## Install
 
