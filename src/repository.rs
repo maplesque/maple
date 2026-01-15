@@ -1,9 +1,17 @@
 use std::{
     collections::HashMap,
+    io::{Read, Seek},
+};
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::{
     fs::File,
-    io::{BufReader, Read},
+    io::BufReader,
     path::Path,
 };
+
+#[cfg(target_arch = "wasm32")]
+use std::io::Cursor;
 
 use image::RgbaImage;
 use zip::ZipArchive;
@@ -14,6 +22,7 @@ use crate::{
     template::Template,
 };
 
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Repository {
     zip: ZipArchive<BufReader<File>>,
     pub template: Template,
@@ -21,7 +30,16 @@ pub struct Repository {
     peak_cache_count: usize,
 }
 
+#[cfg(target_arch = "wasm32")]
+pub struct Repository {
+    zip: ZipArchive<Cursor<Vec<u8>>>,
+    pub template: Template,
+    mappings: HashMap<i32, Mapping>,
+    peak_cache_count: usize,
+}
+
 impl Repository {
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
 
@@ -39,7 +57,18 @@ impl Repository {
         Ok(Repository { zip, template, mappings: HashMap::new(), peak_cache_count: 0 })
     }
 
-    fn load_text_from_zip(zip: &mut ZipArchive<BufReader<File>>, name: &str) -> Result<String> {
+    #[cfg(target_arch = "wasm32")]
+    pub fn load_from_bytes(bytes: Vec<u8>) -> Result<Self> {
+        let reader = Cursor::new(bytes);
+        let mut zip = ZipArchive::new(reader)?;
+
+        let template_json = Self::load_text_from_zip(&mut zip, "template.json")?;
+        let template: Template = serde_json::from_str(&template_json)?;
+
+        Ok(Repository { zip, template, mappings: HashMap::new(), peak_cache_count: 0 })
+    }
+
+    fn load_text_from_zip<R: Read + Seek>(zip: &mut ZipArchive<R>, name: &str) -> Result<String> {
         let mut file = zip.by_name(name).map_err(|_| Error::MissingFile(name.to_string()))?;
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;

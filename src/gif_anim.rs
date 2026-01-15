@@ -1,4 +1,4 @@
-use std::{fs::File, io::BufWriter, path::Path};
+use std::{fs::File, io::{BufWriter, Cursor}, path::Path};
 
 use gif::{Encoder, Frame, Repeat};
 use image::RgbaImage;
@@ -181,6 +181,23 @@ impl GifAnim {
     }
 
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        let (width, height, color_table) = self.build_palette_table()?;
+        let file = File::create(path.as_ref())?;
+        let writer = BufWriter::new(file);
+        self.write_blocks(writer, width, height, &color_table)?;
+
+        Ok(())
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        let (width, height, color_table) = self.build_palette_table()?;
+        let mut out = Vec::new();
+        let writer = BufWriter::new(Cursor::new(&mut out));
+        self.write_blocks(writer, width, height, &color_table)?;
+        Ok(out)
+    }
+
+    fn build_palette_table(&self) -> Result<(u16, u16, Vec<u8>)> {
         if self.blocks.is_empty() {
             return Err(Error::GifEncode("No frames to save".to_string()));
         }
@@ -204,10 +221,17 @@ impl GifAnim {
             color_table.push(0);
         }
 
-        let file = File::create(path.as_ref())?;
-        let writer = BufWriter::new(file);
+        Ok((width, height, color_table))
+    }
 
-        let mut encoder = Encoder::new(writer, width, height, &color_table)
+    fn write_blocks<W: std::io::Write>(
+        &self,
+        writer: W,
+        width: u16,
+        height: u16,
+        color_table: &[u8],
+    ) -> Result<()> {
+        let mut encoder = Encoder::new(writer, width, height, color_table)
             .map_err(|e| Error::GifEncode(e.to_string()))?;
 
         encoder.set_repeat(Repeat::Infinite).map_err(|e| Error::GifEncode(e.to_string()))?;

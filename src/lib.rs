@@ -9,6 +9,8 @@ pub mod renders;
 pub mod repository;
 pub mod template;
 pub mod vid_anim;
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
 
 pub use error::{Error, Result};
 pub use gif_anim::GifAnim;
