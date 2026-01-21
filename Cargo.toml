@@ -33,9 +33,9 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 
-[dependencies.mimalloc]
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.mimalloc]
 version = "0.1"
 default-features = false
 
-[dependencies.rayon]
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.rayon]
 version = "1.10"

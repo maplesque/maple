@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use image::{Rgba, RgbaImage};
+#[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
 
 use crate::{
@@ -93,10 +94,12 @@ impl Render {
         let row_stride = out_w * 4;
         let out_raw = self.out.as_mut();
 
-        out_raw
-            .par_chunks_mut(row_stride)
-            .enumerate()
-            .for_each(|(y, row)| {
+        #[cfg(not(target_arch = "wasm32"))]
+        let iter = out_raw.par_chunks_mut(row_stride).enumerate();
+        #[cfg(target_arch = "wasm32")]
+        let iter = out_raw.chunks_mut(row_stride).enumerate();
+
+        iter.for_each(|(y, row)| {
                 let map_y_base = (y as i32 + off) as u32;
                 if map_y_base >= mapping.map1.height() || map_y_base >= mapping.map2.height() {
                     return;
