@@ -3,6 +3,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use clap::{ArgGroup, Parser};
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use image::Rgba;

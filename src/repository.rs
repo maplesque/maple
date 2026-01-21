@@ -134,6 +134,17 @@ impl Repository {
         self.mappings.remove(&index);
     }
 
+    pub fn take_mapping(&mut self, index: i32) -> Result<Mapping> {
+        let actual_index = if !self.template.is_animation() { 0 } else { index };
+
+        if !self.mappings.contains_key(&actual_index) {
+            let mapping = self.load_frame(actual_index)?;
+            return Ok(mapping);
+        }
+
+        Ok(self.mappings.remove(&actual_index).unwrap())
+    }
+
     pub fn is_animation(&self) -> bool {
         self.template.is_animation()
     }

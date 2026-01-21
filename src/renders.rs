@@ -47,7 +47,7 @@ impl Renders {
 
         if !self.renders.contains_key(&index) {
             let mut render = Render::new(self.quality);
-            let mapping = self.repo.get_mapping(index)?.clone();
+            let mapping = self.repo.take_mapping(index)?;
             render.attach_mapping(mapping);
             render.apply_scaled(&self.inputs, self.target_width, self.target_height)?;
 
@@ -66,7 +66,7 @@ impl Renders {
 
         if !self.renders.contains_key(&index) {
             let mut render = Render::new(self.quality);
-            let mapping = self.repo.get_mapping(index)?.clone();
+            let mapping = self.repo.take_mapping(index)?;
             render.attach_mapping(mapping);
             render.apply_scaled(&self.inputs, self.target_width, self.target_height)?;
 

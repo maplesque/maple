@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use image::{Rgba, RgbaImage};
+use rayon::prelude::*;
 
 use crate::{
     error::{Error, Result},
@@ -64,7 +65,7 @@ impl Render {
         Ok(())
     }
 
-    /// 9-tap antialiased sampling with standard UV map
+    /// 9-tap antialiased sampling with standard UV map (parallelized by row chunks)
     fn add(&mut self, input: &Input) -> Result<()> {
         let mapping = self.mapping.as_ref().ok_or(Error::NoMapping)?;
 
@@ -85,193 +86,191 @@ impl Render {
             return Ok(());
         }
 
-        let out_w = self.out.width() as i32;
-        let out_h = self.out.height() as i32;
+        let out_w = self.out.width() as usize;
+        let _out_h = self.out.height() as usize;
+        let input_img = input.get();
 
-        for y in 0..out_h {
-            for x in 0..out_w {
-                let xu = x as u32;
-                let yu = y as u32;
+        let row_stride = out_w * 4;
+        let out_raw = self.out.as_mut();
 
-                let light_pixel = mapping.light.get_pixel(xu, yu);
-                let dark_pixel = mapping.dark.get_pixel(xu, yu);
-
-                let map_y = (y + off) as u32;
-                if map_y >= mapping.map1.height() || map_y >= mapping.map2.height() {
-                    continue;
+        out_raw
+            .par_chunks_mut(row_stride)
+            .enumerate()
+            .for_each(|(y, row)| {
+                let map_y_base = (y as i32 + off) as u32;
+                if map_y_base >= mapping.map1.height() || map_y_base >= mapping.map2.height() {
+                    return;
                 }
 
-                let map_pixel = mapping.map1.get_pixel(xu, map_y);
-                let sel_pixel = mapping.map2.get_pixel(xu, map_y);
+                for x in 0..out_w {
+                    let xu = x as u32;
+                    let yu = y as u32;
 
-                if sel_pixel[0] != input.layer {
-                    continue;
-                }
+                    let light_pixel = mapping.light.get_pixel(xu, yu);
+                    let dark_pixel = mapping.dark.get_pixel(xu, yu);
 
-                let act = map_pixel[3] as i32;
-                if act <= 25 {
-                    continue;
-                }
+                    let map_pixel = mapping.map1.get_pixel(xu, map_y_base);
+                    let sel_pixel = mapping.map2.get_pixel(xu, map_y_base);
 
-                // Decode UV coordinates from map pixel
-                let b_val = map_pixel[2] as i32;
-                let ymod = b_val / 16;
-                let xmod = b_val % 16;
-                let x1 = map_pixel[0] as f64 + 256.0 * xmod as f64 - RR;
-                let y1 = map_pixel[1] as f64 + 256.0 * ymod as f64 - RR;
+                    if sel_pixel[0] != input.layer {
+                        continue;
+                    }
 
-                let mut x12 = x1;
-                let mut y12 = y1;
-                let mut x13 = x1;
-                let mut y13 = y1;
+                    let act = map_pixel[3] as i32;
+                    if act <= 25 {
+                        continue;
+                    }
 
-                if x < w - 1 && y < h - 1 {
-                    let mdx = mapping.map1.get_pixel((x + 1) as u32, map_y);
-                    let mdy = mapping.map1.get_pixel(xu, map_y + 1);
+                    let b_val = map_pixel[2] as i32;
+                    let ymod = b_val / 16;
+                    let xmod = b_val % 16;
+                    let x1 = map_pixel[0] as f64 + 256.0 * xmod as f64 - RR;
+                    let y1 = map_pixel[1] as f64 + 256.0 * ymod as f64 - RR;
 
-                    if mdx[3] > 127 && mdy[3] > 127 {
-                        let idx2 = mapping.map2.get_pixel((x + 1) as u32, map_y);
-                        let idx3 = mapping.map2.get_pixel(xu, map_y + 1);
+                    let mut x12 = x1;
+                    let mut y12 = y1;
+                    let mut x13 = x1;
+                    let mut y13 = y1;
 
-                        if idx2[0] == input.layer && idx3[0] == input.layer {
-                            let mod2 = mdx[2] as i32;
-                            let ymod2 = mod2 / 16;
-                            let xmod2 = mod2 % 16;
-                            x12 = mdx[0] as f64 + 256.0 * xmod2 as f64 - RR;
-                            y12 = mdx[1] as f64 + 256.0 * ymod2 as f64 - RR;
+                    if (x as i32) < w - 1 && (y as i32) < h - 1 {
+                        let mdx = mapping.map1.get_pixel((x + 1) as u32, map_y_base);
+                        let mdy = mapping.map1.get_pixel(xu, map_y_base + 1);
 
-                            let mod3 = mdy[2] as i32;
-                            let ymod3 = mod3 / 16;
-                            let xmod3 = mod3 % 16;
-                            x13 = mdy[0] as f64 + 256.0 * xmod3 as f64 - RR;
-                            y13 = mdy[1] as f64 + 256.0 * ymod3 as f64 - RR;
-                        }
+                        if mdx[3] > 127 && mdy[3] > 127 {
+                            let idx2 = mapping.map2.get_pixel((x + 1) as u32, map_y_base);
+                            let idx3 = mapping.map2.get_pixel(xu, map_y_base + 1);
 
-                        let da = distance(x1, y1, x12, y12);
-                        let db = distance(x1, y1, x13, y13);
-                        if da > 400.0 || db > 400.0 {
-                            x12 = x1;
-                            y12 = y1;
-                            x13 = x1;
-                            y13 = y1;
+                            if idx2[0] == input.layer && idx3[0] == input.layer {
+                                let mod2 = mdx[2] as i32;
+                                let ymod2 = mod2 / 16;
+                                let xmod2 = mod2 % 16;
+                                x12 = mdx[0] as f64 + 256.0 * xmod2 as f64 - RR;
+                                y12 = mdx[1] as f64 + 256.0 * ymod2 as f64 - RR;
+
+                                let mod3 = mdy[2] as i32;
+                                let ymod3 = mod3 / 16;
+                                let xmod3 = mod3 % 16;
+                                x13 = mdy[0] as f64 + 256.0 * xmod3 as f64 - RR;
+                                y13 = mdy[1] as f64 + 256.0 * ymod3 as f64 - RR;
+                            }
+
+                            let da = distance(x1, y1, x12, y12);
+                            let db = distance(x1, y1, x13, y13);
+                            if da > 400.0 || db > 400.0 {
+                                x12 = x1;
+                                y12 = y1;
+                                x13 = x1;
+                                y13 = y1;
+                            }
                         }
                     }
-                }
 
-                // Apply transforms
-                let x1s = x1 * input.xs;
-                let y1s = y1 * input.ys;
-                let xx_rot = input.xa * x1s + input.ya * y1s;
-                let yy_rot = -input.ya * x1s + input.xa * y1s;
-                let xx = input.in_x0 + active_scale * (xx_rot + RR + input.xo) / RR;
-                let yy = input.in_y0 + active_scale * (yy_rot + RR + input.yo) / RR;
+                    let x1s = x1 * input.xs;
+                    let y1s = y1 * input.ys;
+                    let xx_rot = input.xa * x1s + input.ya * y1s;
+                    let yy_rot = -input.ya * x1s + input.xa * y1s;
+                    let xx = input.in_x0 + active_scale * (xx_rot + RR + input.xo) / RR;
+                    let yy = input.in_y0 + active_scale * (yy_rot + RR + input.yo) / RR;
 
-                let x12s = x12 * input.xs;
-                let y12s = y12 * input.ys;
-                let xxa_rot = input.xa * x12s + input.ya * y12s;
-                let yya_rot = -input.ya * x12s + input.xa * y12s;
-                let xxa = input.in_x0 + active_scale * (xxa_rot + RR + input.xo) / RR - xx;
-                let yya = input.in_y0 + active_scale * (yya_rot + RR + input.yo) / RR - yy;
+                    let x12s = x12 * input.xs;
+                    let y12s = y12 * input.ys;
+                    let xxa_rot = input.xa * x12s + input.ya * y12s;
+                    let yya_rot = -input.ya * x12s + input.xa * y12s;
+                    let xxa = input.in_x0 + active_scale * (xxa_rot + RR + input.xo) / RR - xx;
+                    let yya = input.in_y0 + active_scale * (yya_rot + RR + input.yo) / RR - yy;
 
-                let x13s = x13 * input.xs;
-                let y13s = y13 * input.ys;
-                let xxb_rot = input.xa * x13s + input.ya * y13s;
-                let yyb_rot = -input.ya * x13s + input.xa * y13s;
-                let xxb = input.in_x0 + active_scale * (xxb_rot + RR + input.xo) / RR - xx;
-                let yyb = input.in_y0 + active_scale * (yyb_rot + RR + input.yo) / RR - yy;
+                    let x13s = x13 * input.xs;
+                    let y13s = y13 * input.ys;
+                    let xxb_rot = input.xa * x13s + input.ya * y13s;
+                    let yyb_rot = -input.ya * x13s + input.xa * y13s;
+                    let xxb = input.in_x0 + active_scale * (xxb_rot + RR + input.xo) / RR - xx;
+                    let yyb = input.in_y0 + active_scale * (yyb_rot + RR + input.yo) / RR - yy;
 
-                // 9-tap sampling
-                let mut mo = sample_linear(input.get(), xx, yy);
-                let m2 = sample_linear(input.get(), xx + xxa / 2.0, yy + yya / 2.0);
-                let m3 = sample_linear(input.get(), xx - xxa / 2.0, yy - yya / 2.0);
-                let m4 = sample_linear(input.get(), xx + xxb / 2.0, yy + yyb / 2.0);
-                let m5 = sample_linear(input.get(), xx - xxb / 2.0, yy - yyb / 2.0);
-                let m2b =
-                    sample_linear(input.get(), xx + (xxa + xxb) / 2.0, yy + (yya + yyb) / 2.0);
-                let m3b =
-                    sample_linear(input.get(), xx + (xxa - xxb) / 2.0, yy + (yya - yyb) / 2.0);
-                let m4b =
-                    sample_linear(input.get(), xx - (xxa + xxb) / 2.0, yy - (yya + yyb) / 2.0);
-                let m5b =
-                    sample_linear(input.get(), xx - (xxa - xxb) / 2.0, yy - (yya - yyb) / 2.0);
+                    let mut mo = sample_linear(input_img, xx, yy);
+                    let m2 = sample_linear(input_img, xx + xxa / 2.0, yy + yya / 2.0);
+                    let m3 = sample_linear(input_img, xx - xxa / 2.0, yy - yya / 2.0);
+                    let m4 = sample_linear(input_img, xx + xxb / 2.0, yy + yyb / 2.0);
+                    let m5 = sample_linear(input_img, xx - xxb / 2.0, yy - yyb / 2.0);
+                    let m2b = sample_linear(input_img, xx + (xxa + xxb) / 2.0, yy + (yya + yyb) / 2.0);
+                    let m3b = sample_linear(input_img, xx + (xxa - xxb) / 2.0, yy + (yya - yyb) / 2.0);
+                    let m4b = sample_linear(input_img, xx - (xxa + xxb) / 2.0, yy - (yya + yyb) / 2.0);
+                    let m5b = sample_linear(input_img, xx - (xxa - xxb) / 2.0, yy - (yya - yyb) / 2.0);
 
-                // Preblend (premultiply by alpha)
-                let mut mo_p = mo;
-                mo_p.preblend();
-                let mut m2_p = m2;
-                m2_p.preblend();
-                let mut m3_p = m3;
-                m3_p.preblend();
-                let mut m4_p = m4;
-                m4_p.preblend();
-                let mut m5_p = m5;
-                m5_p.preblend();
-                let mut m2b_p = m2b;
-                m2b_p.preblend();
-                let mut m3b_p = m3b;
-                m3b_p.preblend();
-                let mut m4b_p = m4b;
-                m4b_p.preblend();
-                let mut m5b_p = m5b;
-                m5b_p.preblend();
+                    let mut mo_p = mo;
+                    mo_p.preblend();
+                    let mut m2_p = m2;
+                    m2_p.preblend();
+                    let mut m3_p = m3;
+                    m3_p.preblend();
+                    let mut m4_p = m4;
+                    m4_p.preblend();
+                    let mut m5_p = m5;
+                    m5_p.preblend();
+                    let mut m2b_p = m2b;
+                    m2b_p.preblend();
+                    let mut m3b_p = m3b;
+                    m3b_p.preblend();
+                    let mut m4b_p = m4b;
+                    m4b_p.preblend();
+                    let mut m5b_p = m5b;
+                    m5b_p.preblend();
 
-                // Weighted average: center=4, cardinal=2, diagonal=1
-                let sc = (mo.a * 4.0
-                    + (m2.a + m3.a + m4.a + m5.a) * 2.0
-                    + (m2b.a + m3b.a + m4b.a + m5b.a))
-                    / 16.0;
+                    let sc = (mo.a * 4.0
+                        + (m2.a + m3.a + m4.a + m5.a) * 2.0
+                        + (m2b.a + m3b.a + m4b.a + m5b.a))
+                        / 16.0;
 
-                mo = (mo_p * 4.0
-                    + (m2_p + m3_p + m4_p + m5_p) * 2.0
-                    + (m2b_p + m3b_p + m4b_p + m5b_p))
-                    / 16.0;
+                    mo = (mo_p * 4.0
+                        + (m2_p + m3_p + m4_p + m5_p) * 2.0
+                        + (m2b_p + m3b_p + m4b_p + m5b_p))
+                        / 16.0;
 
-                if sc > 0.0001 {
-                    mo.postblend(sc);
-                } else {
-                    mo.r = 0.0;
-                    mo.g = 0.0;
-                    mo.b = 0.0;
-                    mo.a = 0.0;
-                }
-
-                let m_r = mo.r as i32;
-                let m_g = mo.g as i32;
-                let m_b = mo.b as i32;
-                let m_a = mo.a as i32;
-
-                let result_r = dark_pixel[0] as i32
-                    + ((light_pixel[0] as i32 - dark_pixel[0] as i32) * m_r) / 255;
-                let result_g = dark_pixel[1] as i32
-                    + ((light_pixel[1] as i32 - dark_pixel[1] as i32) * m_g) / 255;
-                let result_b = dark_pixel[2] as i32
-                    + ((light_pixel[2] as i32 - dark_pixel[2] as i32) * m_b) / 255;
-                let mut result_a = m_a;
-
-                if (dark_pixel[3] as i32) < result_a {
-                    result_a = dark_pixel[3] as i32;
-                }
-
-                if result_a > 0 {
-                    let out_pixel = self.out.get_pixel_mut(xu, yu);
-                    if result_a > 250 {
-                        out_pixel[0] = result_r.clamp(0, 255) as u8;
-                        out_pixel[1] = result_g.clamp(0, 255) as u8;
-                        out_pixel[2] = result_b.clamp(0, 255) as u8;
+                    if sc > 0.0001 {
+                        mo.postblend(sc);
                     } else {
-                        out_pixel[0] = (out_pixel[0] as i32
-                            + ((result_r - out_pixel[0] as i32) * result_a) / 255)
-                            .clamp(0, 255) as u8;
-                        out_pixel[1] = (out_pixel[1] as i32
-                            + ((result_g - out_pixel[1] as i32) * result_a) / 255)
-                            .clamp(0, 255) as u8;
-                        out_pixel[2] = (out_pixel[2] as i32
-                            + ((result_b - out_pixel[2] as i32) * result_a) / 255)
-                            .clamp(0, 255) as u8;
+                        mo.r = 0.0;
+                        mo.g = 0.0;
+                        mo.b = 0.0;
+                        mo.a = 0.0;
+                    }
+
+                    let m_r = mo.r as i32;
+                    let m_g = mo.g as i32;
+                    let m_b = mo.b as i32;
+                    let m_a = mo.a as i32;
+
+                    let result_r = dark_pixel[0] as i32
+                        + ((light_pixel[0] as i32 - dark_pixel[0] as i32) * m_r) / 255;
+                    let result_g = dark_pixel[1] as i32
+                        + ((light_pixel[1] as i32 - dark_pixel[1] as i32) * m_g) / 255;
+                    let result_b = dark_pixel[2] as i32
+                        + ((light_pixel[2] as i32 - dark_pixel[2] as i32) * m_b) / 255;
+                    let mut result_a = m_a;
+
+                    if (dark_pixel[3] as i32) < result_a {
+                        result_a = dark_pixel[3] as i32;
+                    }
+
+                    if result_a > 0 {
+                        let idx = x * 4;
+                        if result_a > 250 {
+                            row[idx] = result_r.clamp(0, 255) as u8;
+                            row[idx + 1] = result_g.clamp(0, 255) as u8;
+                            row[idx + 2] = result_b.clamp(0, 255) as u8;
+                        } else {
+                            row[idx] = (row[idx] as i32
+                                + ((result_r - row[idx] as i32) * result_a) / 255)
+                                .clamp(0, 255) as u8;
+                            row[idx + 1] = (row[idx + 1] as i32
+                                + ((result_g - row[idx + 1] as i32) * result_a) / 255)
+                                .clamp(0, 255) as u8;
+                            row[idx + 2] = (row[idx + 2] as i32
+                                + ((result_b - row[idx + 2] as i32) * result_a) / 255)
+                                .clamp(0, 255) as u8;
+                        }
                     }
                 }
-            }
-        }
+            });
 
         Ok(())
     }

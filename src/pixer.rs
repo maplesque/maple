@@ -9,24 +9,29 @@ pub struct Pixer {
 }
 
 impl Pixer {
+    #[inline(always)]
     pub fn new() -> Self {
         Pixer::default()
     }
 
+    #[inline(always)]
     pub fn from_rgba(pixel: &Rgba<u8>) -> Self {
         Pixer { r: pixel[0] as f64, g: pixel[1] as f64, b: pixel[2] as f64, a: pixel[3] as f64 }
     }
 
+    #[inline(always)]
     pub fn to_rgba(&self) -> Rgba<u8> {
         Rgba([clamp_u8(self.r), clamp_u8(self.g), clamp_u8(self.b), clamp_u8(self.a)])
     }
 
+    #[inline(always)]
     pub fn preblend(&mut self) {
         self.r *= self.a;
         self.g *= self.a;
         self.b *= self.a;
     }
 
+    #[inline(always)]
     pub fn postblend(&mut self, scale: f64) {
         if scale > 0.0001 {
             self.r /= scale;
@@ -118,7 +123,7 @@ fn clamp_u8(v: f64) -> u8 {
     }
 }
 
-#[inline]
+#[inline(always)]
 pub fn safe_pixel(img: &RgbaImage, x: i32, y: i32) -> Rgba<u8> {
     let w = img.width() as i32;
     let h = img.height() as i32;
@@ -131,6 +136,7 @@ pub fn safe_pixel(img: &RgbaImage, x: i32, y: i32) -> Rgba<u8> {
 }
 
 /// Bilinear interpolation with alpha-weighted averaging
+#[inline(always)]
 pub fn sample_linear(img: &RgbaImage, x: f64, y: f64) -> Pixer {
     let xx = x.floor() as i32;
     let yy = y.floor() as i32;
@@ -179,7 +185,7 @@ pub fn sample_weakly(img: &RgbaImage, x: f64, y: f64) -> Pixer {
     Pixer::from_rgba(&safe_pixel(img, x as i32, y as i32))
 }
 
-#[inline]
+#[inline(always)]
 pub fn distance(x1: f64, y1: f64, x2: f64, y2: f64) -> f64 {
     ((x1 - x2).powi(2) + (y1 - y2).powi(2)).sqrt()
 }
