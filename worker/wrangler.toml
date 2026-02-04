@@ -1,0 +1,13 @@
+name = "maple-discord-bot"
+main = "src/index.ts"
+compatibility_date = "2025-12-01"
+account_id = "fe5d9bd14160b07939282e45f63eb5ad"
+
+[vars]
+DISCORD_PUBLIC_KEY = "3b4594640db189c917af1d8499d3212ccb1803b1a82d4e14853b6b0de96527fb"
+APPLICATION_ID = "1468697054023913638"
+MAX_OUTPUT_BYTES = 24000000
+
+[assets]
+directory = "assets"
+binding = "ASSETS"

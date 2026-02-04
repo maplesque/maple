@@ -1,0 +1,5 @@
+node_modules
+pkg
+wrangler.toml.local
+.wrangler
+.DS_Store
