@@ -4,11 +4,7 @@ use std::{
 };
 
 #[cfg(not(target_arch = "wasm32"))]
-use std::{
-    fs::File,
-    io::BufReader,
-    path::Path,
-};
+use std::{fs::File, io::BufReader, path::Path};
 
 #[cfg(target_arch = "wasm32")]
 use std::io::Cursor;

@@ -1,22 +1,8 @@
-pub mod error;
-pub mod gif_anim;
-pub mod input;
-pub mod mapping;
-pub mod pixer;
-pub mod quantize;
-pub mod render;
-pub mod renders;
-pub mod repository;
-pub mod template;
-pub mod vid_anim;
+pub use maple_render_core::{
+    Error, GifAnim, Input, Inputs, Mapping, Render, Renders, Repository, Result, Template,
+    TextOptions, error, gif_anim, input, mapping, pixer, quantize, render, renders, repository,
+    template, vid_anim,
+};
+
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
-
-pub use error::{Error, Result};
-pub use gif_anim::GifAnim;
-pub use input::{Input, TextOptions};
-pub use mapping::Mapping;
-pub use render::Render;
-pub use renders::Renders;
-pub use repository::Repository;
-pub use template::Template;

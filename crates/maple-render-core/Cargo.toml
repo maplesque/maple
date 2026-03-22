@@ -1,0 +1,24 @@
+[package]
+name = "maple-render-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+description = "Core rendering and animation logic for Maple templates"
+license = "MIT"
+repository = "https://github.com/davebcn87/maple"
+readme = "README.md"
+keywords = ["gif", "image", "rendering", "template", "animation"]
+categories = ["multimedia::images", "multimedia::video"]
+
+[dependencies]
+image = "0.25"
+gif = "0.13"
+zip = { version = "2.1", default-features = false, features = ["deflate"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+delaunator = "1.0"
+ab_glyph = "0.2"
+imageproc = "0.25"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.rayon]
+version = "1.10"

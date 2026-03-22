@@ -6,8 +6,6 @@ use imageproc::drawing::draw_text_mut;
 
 use crate::error::{Error, Result};
 
-const DEFAULT_FONT: &[u8] = include_bytes!("../fonts/DejaVuSans-Bold.ttf");
-
 #[derive(Clone)]
 pub struct TextOptions {
     pub font_size: f32,
@@ -92,8 +90,13 @@ impl Input {
         input
     }
 
-    pub fn from_text(text: &str, layer: u8, options: &TextOptions) -> Result<Self> {
-        let font = FontRef::try_from_slice(DEFAULT_FONT)
+    pub fn from_text(
+        text: &str,
+        layer: u8,
+        options: &TextOptions,
+        font_data: &[u8],
+    ) -> Result<Self> {
+        let font = FontRef::try_from_slice(font_data)
             .map_err(|e| Error::TextRender(format!("Failed to load font: {}", e)))?;
 
         let scale = PxScale::from(options.font_size);

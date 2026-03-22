@@ -1,0 +1,20 @@
+pub mod error;
+pub mod gif_anim;
+pub mod input;
+pub mod mapping;
+pub mod pixer;
+pub mod quantize;
+pub mod render;
+pub mod renders;
+pub mod repository;
+pub mod template;
+pub mod vid_anim;
+
+pub use error::{Error, Result};
+pub use gif_anim::GifAnim;
+pub use input::{Input, Inputs, TextOptions};
+pub use mapping::Mapping;
+pub use render::Render;
+pub use renders::Renders;
+pub use repository::Repository;
+pub use template::Template;

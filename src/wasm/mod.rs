@@ -13,10 +13,15 @@ use crate::{
     repository::Repository,
 };
 
+const DEFAULT_FONT: &[u8] = include_bytes!("../../fonts/DejaVuSans-Bold.ttf");
+
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 enum InputSpec {
-    Image { layer: u8, bytes: Vec<u8> },
+    Image {
+        layer: u8,
+        bytes: Vec<u8>,
+    },
     Text {
         layer: u8,
         text: String,
@@ -61,69 +66,11 @@ pub fn template_info(template_zip: &[u8]) -> Result<JsValue, JsValue> {
 }
 
 #[wasm_bindgen]
-pub fn render_png(template_zip: &[u8], inputs: JsValue, options: JsValue) -> Result<Vec<u8>, JsValue> {
-    let input_specs: Vec<InputSpec> =
-        serde_wasm_bindgen::from_value(inputs).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    if input_specs.is_empty() {
-        return Err(JsValue::from_str("At least one input is required."));
-    }
-
-    let options: RenderOptions = if options.is_null() || options.is_undefined() {
-        RenderOptions::default()
-    } else {
-        serde_wasm_bindgen::from_value(options).map_err(|e| JsValue::from_str(&e.to_string()))?
-    };
-
-    let mut inputs = Inputs::new();
-    for spec in input_specs {
-        match spec {
-            InputSpec::Image { layer, bytes } => {
-                if !is_png(&bytes) {
-                    return Err(JsValue::from_str("Only PNG inputs are supported."));
-                }
-                let img = image::load_from_memory(&bytes).map_err(|e| to_js_error(Error::from(e)))?;
-                inputs.push(Input::from_image(img.to_rgba8(), layer));
-            }
-            InputSpec::Text { layer, text, font_size, color, background, padding } => {
-                let mut options = TextOptions::default();
-                if let Some(size) = font_size {
-                    options.font_size = size;
-                }
-                if let Some(padding) = padding {
-                    options.padding = padding;
-                }
-                if let Some(color) = color {
-                    options.color = parse_hex_color(&color)?;
-                }
-                if let Some(background) = background {
-                    options.background = parse_hex_color(&background)?;
-                }
-                let input = Input::from_text(&text, layer, &options).map_err(to_js_error)?;
-                inputs.push(input);
-            }
-        }
-    }
-
-    let repo = Repository::load_from_bytes(template_zip.to_vec()).map_err(to_js_error)?;
-    let mut renders = Renders::new(repo, inputs, RenderQuality::Sampled);
-
-    if let (Some(w), Some(h)) = (options.width, options.height) {
-        if w > 0 && h > 0 {
-            renders.set_size(w, h);
-        }
-    }
-
-    if options.auto_zoom.unwrap_or(false) {
-        renders.auto_zoom().map_err(to_js_error)?;
-    }
-
-    let frame = options.frame.unwrap_or(0);
-    let render = renders.get_render(frame).map_err(to_js_error)?;
-    encode_png(render.get()).map_err(to_js_error)
-}
-
-#[wasm_bindgen]
-pub fn render_gif(template_zip: &[u8], inputs: JsValue, options: JsValue) -> Result<Vec<u8>, JsValue> {
+pub fn render_png(
+    template_zip: &[u8],
+    inputs: JsValue,
+    options: JsValue,
+) -> Result<Vec<u8>, JsValue> {
     let input_specs: Vec<InputSpec> =
         serde_wasm_bindgen::from_value(inputs).map_err(|e| JsValue::from_str(&e.to_string()))?;
     if input_specs.is_empty() {
@@ -161,7 +108,76 @@ pub fn render_gif(template_zip: &[u8], inputs: JsValue, options: JsValue) -> Res
                 if let Some(background) = background {
                     options.background = parse_hex_color(&background)?;
                 }
-                let input = Input::from_text(&text, layer, &options).map_err(to_js_error)?;
+                let input =
+                    Input::from_text(&text, layer, &options, DEFAULT_FONT).map_err(to_js_error)?;
+                inputs.push(input);
+            }
+        }
+    }
+
+    let repo = Repository::load_from_bytes(template_zip.to_vec()).map_err(to_js_error)?;
+    let mut renders = Renders::new(repo, inputs, RenderQuality::Sampled);
+
+    if let (Some(w), Some(h)) = (options.width, options.height) {
+        if w > 0 && h > 0 {
+            renders.set_size(w, h);
+        }
+    }
+
+    if options.auto_zoom.unwrap_or(false) {
+        renders.auto_zoom().map_err(to_js_error)?;
+    }
+
+    let frame = options.frame.unwrap_or(0);
+    let render = renders.get_render(frame).map_err(to_js_error)?;
+    encode_png(render.get()).map_err(to_js_error)
+}
+
+#[wasm_bindgen]
+pub fn render_gif(
+    template_zip: &[u8],
+    inputs: JsValue,
+    options: JsValue,
+) -> Result<Vec<u8>, JsValue> {
+    let input_specs: Vec<InputSpec> =
+        serde_wasm_bindgen::from_value(inputs).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    if input_specs.is_empty() {
+        return Err(JsValue::from_str("At least one input is required."));
+    }
+
+    let options: RenderOptions = if options.is_null() || options.is_undefined() {
+        RenderOptions::default()
+    } else {
+        serde_wasm_bindgen::from_value(options).map_err(|e| JsValue::from_str(&e.to_string()))?
+    };
+
+    let mut inputs = Inputs::new();
+    for spec in input_specs {
+        match spec {
+            InputSpec::Image { layer, bytes } => {
+                if !is_png(&bytes) {
+                    return Err(JsValue::from_str("Only PNG inputs are supported."));
+                }
+                let img =
+                    image::load_from_memory(&bytes).map_err(|e| to_js_error(Error::from(e)))?;
+                inputs.push(Input::from_image(img.to_rgba8(), layer));
+            }
+            InputSpec::Text { layer, text, font_size, color, background, padding } => {
+                let mut options = TextOptions::default();
+                if let Some(size) = font_size {
+                    options.font_size = size;
+                }
+                if let Some(padding) = padding {
+                    options.padding = padding;
+                }
+                if let Some(color) = color {
+                    options.color = parse_hex_color(&color)?;
+                }
+                if let Some(background) = background {
+                    options.background = parse_hex_color(&background)?;
+                }
+                let input =
+                    Input::from_text(&text, layer, &options, DEFAULT_FONT).map_err(to_js_error)?;
                 inputs.push(input);
             }
         }
@@ -202,9 +218,12 @@ fn parse_hex_color(value: &str) -> Result<Rgba<u8>, JsValue> {
     if hex.len() != 6 && hex.len() != 8 {
         return Err(JsValue::from_str("Color must be 6 or 8 hex digits."));
     }
-    let r = u8::from_str_radix(&hex[0..2], 16).map_err(|_| JsValue::from_str("Invalid hex color."))?;
-    let g = u8::from_str_radix(&hex[2..4], 16).map_err(|_| JsValue::from_str("Invalid hex color."))?;
-    let b = u8::from_str_radix(&hex[4..6], 16).map_err(|_| JsValue::from_str("Invalid hex color."))?;
+    let r =
+        u8::from_str_radix(&hex[0..2], 16).map_err(|_| JsValue::from_str("Invalid hex color."))?;
+    let g =
+        u8::from_str_radix(&hex[2..4], 16).map_err(|_| JsValue::from_str("Invalid hex color."))?;
+    let b =
+        u8::from_str_radix(&hex[4..6], 16).map_err(|_| JsValue::from_str("Invalid hex color."))?;
     let a = if hex.len() == 8 {
         u8::from_str_radix(&hex[6..8], 16).map_err(|_| JsValue::from_str("Invalid hex color."))?
     } else {

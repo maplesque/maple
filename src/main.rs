@@ -10,7 +10,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use clap::{ArgGroup, Parser};
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use image::Rgba;
-use maple::{
+use maple_render_core::{
     gif_anim::GifAnim,
     input::{Input, Inputs, TextOptions},
     render::{Render, RenderQuality},
@@ -148,6 +148,8 @@ struct JsonInput {
     in_ya: f64,
 }
 
+const DEFAULT_FONT: &[u8] = include_bytes!("../fonts/DejaVuSans-Bold.ttf");
+
 fn default_scale() -> f64 {
     1.0
 }
@@ -212,13 +214,13 @@ fn main() -> Result<()> {
 
         let mut input = if let Some(text) = path.strip_prefix("text:") {
             eprintln!("Rendering text: \"{}\"", text);
-            Input::from_text(text, layer, &text_options)
+            Input::from_text(text, layer, &text_options, DEFAULT_FONT)
                 .wrap_err_with(|| format!("Failed to render text: {}", text))?
         } else if Path::new(&path).exists() {
             Input::load(&path).wrap_err_with(|| format!("Failed to load input: {}", path))?
         } else {
             eprintln!("File '{}' not found, treating as text input", path);
-            Input::from_text(&path, layer, &text_options)
+            Input::from_text(&path, layer, &text_options, DEFAULT_FONT)
                 .wrap_err_with(|| format!("Failed to render text: {}", path))?
         };
 

@@ -811,20 +811,30 @@ dependencies = [
 name = "maple"
 version = "0.1.0"
 dependencies = [
- "ab_glyph",
  "clap",
  "color-eyre",
- "delaunator",
  "eyre",
- "gif 0.13.3",
  "image",
- "imageproc",
+ "maple-render-core",
  "mimalloc",
- "rayon",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "maple-render-core"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "delaunator",
+ "gif 0.13.3",
+ "image",
+ "imageproc",
+ "rayon",
+ "serde",
+ "serde_json",
  "zip",
 ]
 

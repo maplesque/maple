@@ -4,6 +4,8 @@
 
 maple allows you to composite images/text with templates into animated GIFs/Videos. `templates/` has some fun ones to try!
 
+Core rendering logic now lives in the publishable [`maple-render-core`](crates/maple-render-core) crate. The core crate does not bundle templates or fonts.
+
 ## Install
 
 ```
@@ -11,6 +13,14 @@ cargo install --path .
 ```
 
 Requires Rust 1.80+. Video output requires ffmpeg.
+
+## Core crate (publishable)
+
+The standalone core crate lives at `crates/maple-render-core`.
+
+```bash
+cargo publish --manifest-path crates/maple-render-core/Cargo.toml
+```
 
 ## Usage
 

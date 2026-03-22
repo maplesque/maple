@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - trunk
+      - main
+    tags:
+      - "core-v*"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish maple-render-core to crates.io"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: target
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (root crate)
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Check root crate
+        run: cargo check --locked
+
+      - name: Test root crate
+        run: cargo test --locked --lib
+
+      - name: Check wasm exports
+        run: cargo check --locked --lib --target wasm32-unknown-unknown
+
+      - name: Check maple-render-core standalone crate
+        run: cargo check --manifest-path crates/maple-render-core/Cargo.toml
+
+      - name: Test maple-render-core standalone crate
+        run: cargo test --manifest-path crates/maple-render-core/Cargo.toml
+
+      - name: Verify maple-render-core publish dry-run
+        run: cargo publish --dry-run --allow-dirty --manifest-path crates/maple-render-core/Cargo.toml
+
+  publish-maple-render-core:
+    name: Publish maple-render-core
+    runs-on: ubuntu-latest
+    needs: rust
+    if: startsWith(github.ref, 'refs/tags/core-v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Validate tag matches crate version
+        if: startsWith(github.ref, 'refs/tags/core-v')
+        run: |
+          VERSION=$(grep '^version = ' crates/maple-render-core/Cargo.toml | head -n1 | cut -d '"' -f2)
+          TAG_VERSION="${GITHUB_REF_NAME#core-v}"
+          if [ "$VERSION" != "$TAG_VERSION" ]; then
+            echo "Tag version ($TAG_VERSION) does not match crate version ($VERSION)"
+            exit 1
+          fi
+
+      - name: Publish maple-render-core to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --manifest-path crates/maple-render-core/Cargo.toml --token "$CARGO_REGISTRY_TOKEN"

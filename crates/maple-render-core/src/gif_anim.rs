@@ -1,4 +1,8 @@
-use std::{fs::File, io::{BufWriter, Cursor}, path::Path};
+use std::{
+    fs::File,
+    io::{BufWriter, Cursor},
+    path::Path,
+};
 
 use gif::{Encoder, Frame, Repeat};
 use image::RgbaImage;
