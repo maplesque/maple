@@ -1,6 +1,6 @@
 # maple-render-core
 
-Core rendering engine extracted from Maple.
+Core rendering engine extracted from maple.
 
 This crate contains:
 
@@ -13,25 +13,6 @@ This crate contains:
 It intentionally does **not** bundle templates or font assets.
 For text rendering, callers must pass font bytes into `Input::from_text`.
 
-## Publish checklist
-
-From the repository root:
-
-```bash
-# 1) Validate locally
-cargo check --manifest-path crates/maple-render-core/Cargo.toml
-cargo test --manifest-path crates/maple-render-core/Cargo.toml
-
-# 2) Inspect package contents
-cargo package --manifest-path crates/maple-render-core/Cargo.toml --list
-
-# 3) Full registry validation without upload
-cargo publish --manifest-path crates/maple-render-core/Cargo.toml --dry-run
-
-# 4) Publish for real
-cargo publish --manifest-path crates/maple-render-core/Cargo.toml
-```
-
 ## Minimal usage
 
 ```rust
@@ -39,7 +20,7 @@ use maple_render_core::{GifAnim, Input, Inputs, Renders, Repository, TextOptions
 use maple_render_core::render::RenderQuality;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Load a template zip generated using Maple's template format.
+    // Load a template zip generated using maple's template format.
     let repo = Repository::load("templates/toaster.zip")?;
 
     // Add image input.

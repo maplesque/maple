@@ -16,8 +16,8 @@ This repository publishes the `maple-render-core` crate through GitHub Actions.
 3. Create and push a tag in this format:
 
    ```bash
-   git tag core-v0.1.0
-   git push origin core-v0.1.0
+   git tag core-v<version>
+   git push origin core-v<version>
    ```
 
 4. CI runs checks, then publishes `maple-render-core` to crates.io.

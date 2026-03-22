@@ -809,7 +809,7 @@ dependencies = [
 
 [[package]]
 name = "maple"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "color-eyre",
@@ -825,7 +825,7 @@ dependencies = [
 
 [[package]]
 name = "maple-render-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ab_glyph",
  "delaunator",

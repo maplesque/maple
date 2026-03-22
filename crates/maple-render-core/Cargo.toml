@@ -1,11 +1,11 @@
 [package]
 name = "maple-render-core"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.80"
-description = "Core rendering and animation logic for Maple templates"
+description = "Core rendering and animation logic for maple templates"
 license = "MIT"
-repository = "https://github.com/davebcn87/maple"
+repository = "https://github.com/taskylizard/maple"
 readme = "README.md"
 keywords = ["gif", "image", "rendering", "template", "animation"]
 categories = ["multimedia::images", "multimedia::video"]
