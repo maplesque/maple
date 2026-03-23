@@ -1,13 +1,10 @@
 use std::{
     collections::HashMap,
-    io::{Read, Seek},
+    io::{Cursor, Read, Seek},
 };
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::{fs::File, io::BufReader, path::Path};
-
-#[cfg(target_arch = "wasm32")]
-use std::io::Cursor;
 
 use image::RgbaImage;
 use zip::ZipArchive;
@@ -18,17 +15,11 @@ use crate::{
     template::Template,
 };
 
-#[cfg(not(target_arch = "wasm32"))]
-pub struct Repository {
-    zip: ZipArchive<BufReader<File>>,
-    pub template: Template,
-    mappings: HashMap<i32, Mapping>,
-    peak_cache_count: usize,
-}
+trait ReadSeek: Read + Seek {}
+impl<T: Read + Seek> ReadSeek for T {}
 
-#[cfg(target_arch = "wasm32")]
 pub struct Repository {
-    zip: ZipArchive<Cursor<Vec<u8>>>,
+    zip: ZipArchive<Box<dyn ReadSeek>>,
     pub template: Template,
     mappings: HashMap<i32, Mapping>,
     peak_cache_count: usize,
@@ -44,18 +35,16 @@ impl Repository {
         }
 
         let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        let mut zip = ZipArchive::new(reader)?;
-
-        let template_json = Self::load_text_from_zip(&mut zip, "template.json")?;
-        let template: Template = serde_json::from_str(&template_json)?;
-
-        Ok(Repository { zip, template, mappings: HashMap::new(), peak_cache_count: 0 })
+        let reader: Box<dyn ReadSeek> = Box::new(BufReader::new(file));
+        Self::load_from_reader(reader)
     }
 
-    #[cfg(target_arch = "wasm32")]
     pub fn load_from_bytes(bytes: Vec<u8>) -> Result<Self> {
-        let reader = Cursor::new(bytes);
+        let reader: Box<dyn ReadSeek> = Box::new(Cursor::new(bytes));
+        Self::load_from_reader(reader)
+    }
+
+    fn load_from_reader(reader: Box<dyn ReadSeek>) -> Result<Self> {
         let mut zip = ZipArchive::new(reader)?;
 
         let template_json = Self::load_text_from_zip(&mut zip, "template.json")?;

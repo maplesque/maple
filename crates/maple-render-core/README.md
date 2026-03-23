@@ -41,3 +41,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+## Load templates from bytes (embedded at build time)
+
+You can bundle your template ZIP into your binary and load it without touching the filesystem at runtime.
+
+`build.rs`:
+
+```rust
+use std::{env, fs, path::PathBuf};
+
+fn main() {
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    fs::copy("templates/toaster.zip", out_dir.join("template.zip")).unwrap();
+    println!("cargo:rerun-if-changed=templates/toaster.zip");
+}
+```
+
+`src/main.rs`:
+
+```rust
+use maple_render_core::Repository;
+
+const TEMPLATE_ZIP: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/template.zip"));
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let repo = Repository::load_from_bytes(TEMPLATE_ZIP.to_vec())?;
+    // ...
+    Ok(())
+}
+```

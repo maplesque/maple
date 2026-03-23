@@ -117,6 +117,10 @@ struct Cli {
     /// Background color for text inputs as hex (default: "FFFFFF" white)
     #[arg(long)]
     text_bg: Option<String>,
+
+    /// Enable Floyd-Steinberg dithering during GIF quantization (slower, can improve gradients)
+    #[arg(long)]
+    dither: bool,
 }
 
 #[derive(Deserialize)]
@@ -265,6 +269,7 @@ fn main() -> Result<()> {
         let repo_ref = Repository::load(zip_path)?;
         anim.set_palette_frames(repo_ref.get_palette());
         anim.set_timing(repo_ref.get_period(), repo_ref.get_hold());
+        anim.set_dither(cli.dither);
 
         if let Some(start) = cli.start {
             anim.set_first_frame(start);

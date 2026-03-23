@@ -21,6 +21,7 @@ pub struct GifAnim {
     first_frame: i32,
     blocks: Vec<GifBlock>,
     palette: Option<Palette>,
+    dither: bool,
 }
 
 struct GifBlock {
@@ -40,7 +41,12 @@ impl GifAnim {
             first_frame: -1,
             blocks: Vec::new(),
             palette: None,
+            dither: false,
         }
+    }
+
+    pub fn set_dither(&mut self, dither: bool) {
+        self.dither = dither;
     }
 
     pub fn set_palette(&mut self, index: i32) {
@@ -73,19 +79,20 @@ impl GifAnim {
         let mut pal_index: i32 = -1;
 
         for (i, &idx) in self.palette_frames.iter().enumerate() {
-            // Get the rendered image first
-            let img = {
-                let render = self.renders.get_render(idx)?;
-                render.get().clone()
-            };
-            self.renders.remove_mapping(idx);
-
             if pals == 1 {
-                pal_image = Some(img);
+                let render = self.renders.get_render(idx)?;
+                pal_image = Some(render.get().clone());
                 pal_index = idx;
-            } else {
+                self.renders.remove_mapping(idx);
+                continue;
+            }
+
+            {
+                let render = self.renders.get_render(idx)?;
+                let img = render.get();
                 let w = img.width() as usize;
                 let h = img.height() as usize;
+
                 if pal_image.is_none() {
                     pal_image = Some(img.clone());
                 } else {
@@ -98,6 +105,8 @@ impl GifAnim {
                     }
                 }
             }
+
+            self.renders.remove_mapping(idx);
         }
 
         let pal_image = pal_image.ok_or(Error::MissingData("No palette image".to_string()))?;
@@ -107,8 +116,7 @@ impl GifAnim {
         let mut quantizer = Quantizer::new(&pal_image);
         self.palette = Some(quantizer.palette().clone());
 
-        let mut prev_indices = quantizer.quantize(&pal_image, true);
-        let _pre_prev_indices = prev_indices.clone();
+        let mut prev_indices = quantizer.quantize(&pal_image, self.dither);
 
         let frames = self.renders.length() as i32;
 
@@ -122,12 +130,12 @@ impl GifAnim {
             step_pending = step_pending.saturating_add(step);
 
             let curr_indices = if i != pal_index {
-                let img = {
+                let quantized = {
                     let render = self.renders.get_render(i)?;
-                    render.get().clone()
+                    quantizer.quantize(render.get(), self.dither)
                 };
                 self.renders.remove_mapping(i);
-                quantizer.quantize(&img, true)
+                quantized
             } else {
                 prev_indices.clone()
             };
