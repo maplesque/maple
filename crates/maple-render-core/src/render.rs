@@ -91,7 +91,13 @@ impl Render {
         let _out_h = self.out.height() as usize;
         let input_img = input.get();
 
+        let light_raw = mapping.light.as_raw();
+        let dark_raw = mapping.dark.as_raw();
+        let map1_raw = mapping.map1.as_raw();
+        let map2_raw = mapping.map2.as_raw();
+
         let row_stride = out_w * 4;
+        let map_stride = mapping.map1.width() as usize * 4;
         let out_raw = self.out.as_mut();
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -106,14 +112,14 @@ impl Render {
             }
 
             for x in 0..out_w {
-                let xu = x as u32;
-                let yu = y as u32;
+                let idx = x * 4;
+                let light_idx = y * row_stride + idx;
+                let map_idx = map_y_base as usize * map_stride + idx;
 
-                let light_pixel = mapping.light.get_pixel(xu, yu);
-                let dark_pixel = mapping.dark.get_pixel(xu, yu);
-
-                let map_pixel = mapping.map1.get_pixel(xu, map_y_base);
-                let sel_pixel = mapping.map2.get_pixel(xu, map_y_base);
+                let light_pixel = &light_raw[light_idx..light_idx + 4];
+                let dark_pixel = &dark_raw[light_idx..light_idx + 4];
+                let map_pixel = &map1_raw[map_idx..map_idx + 4];
+                let sel_pixel = &map2_raw[map_idx..map_idx + 4];
 
                 if sel_pixel[0] != input.layer {
                     continue;
@@ -136,12 +142,14 @@ impl Render {
                 let mut y13 = y1;
 
                 if (x as i32) < w - 1 && (y as i32) < h - 1 {
-                    let mdx = mapping.map1.get_pixel((x + 1) as u32, map_y_base);
-                    let mdy = mapping.map1.get_pixel(xu, map_y_base + 1);
+                    let mdx_idx = map_idx + 4;
+                    let mdy_idx = map_idx + map_stride;
+                    let mdx = &map1_raw[mdx_idx..mdx_idx + 4];
+                    let mdy = &map1_raw[mdy_idx..mdy_idx + 4];
 
                     if mdx[3] > 127 && mdy[3] > 127 {
-                        let idx2 = mapping.map2.get_pixel((x + 1) as u32, map_y_base);
-                        let idx3 = mapping.map2.get_pixel(xu, map_y_base + 1);
+                        let idx2 = &map2_raw[mdx_idx..mdx_idx + 4];
+                        let idx3 = &map2_raw[mdy_idx..mdy_idx + 4];
 
                         if idx2[0] == input.layer && idx3[0] == input.layer {
                             let mod2 = mdx[2] as i32;
