@@ -143,15 +143,60 @@ pub fn sample_linear(img: &RgbaImage, x: f64, y: f64) -> Pixer {
     let fx = x - xx as f64;
     let fy = y - yy as f64;
 
-    let p00 = safe_pixel(img, xx, yy);
-    let p10 = safe_pixel(img, xx + 1, yy);
-    let p01 = safe_pixel(img, xx, yy + 1);
-    let p11 = safe_pixel(img, xx + 1, yy + 1);
-
     let w00 = (1.0 - fx) * (1.0 - fy);
     let w10 = fx * (1.0 - fy);
     let w01 = (1.0 - fx) * fy;
     let w11 = fx * fy;
+
+    let w = img.width() as i32;
+    let h = img.height() as i32;
+
+    if xx >= 0 && yy >= 0 && xx + 1 < w && yy + 1 < h {
+        let raw = img.as_raw();
+        let w_us = w as usize;
+        let row_stride = w_us * 4;
+
+        let row0 = yy as usize * row_stride;
+        let row1 = row0 + row_stride;
+        let col = xx as usize * 4;
+
+        let i00 = row0 + col;
+        let i10 = i00 + 4;
+        let i01 = row1 + col;
+        let i11 = i01 + 4;
+
+        let a00 = raw[i00 + 3] as f64;
+        let a10 = raw[i10 + 3] as f64;
+        let a01 = raw[i01 + 3] as f64;
+        let a11 = raw[i11 + 3] as f64;
+
+        let aa = w00 * a00 + w10 * a10 + w01 * a01 + w11 * a11;
+        let aa_safe = if aa < 0.0001 { 0.0001 } else { aa };
+
+        return Pixer {
+            r: (w00 * raw[i00] as f64 * a00
+                + w10 * raw[i10] as f64 * a10
+                + w01 * raw[i01] as f64 * a01
+                + w11 * raw[i11] as f64 * a11)
+                / aa_safe,
+            g: (w00 * raw[i00 + 1] as f64 * a00
+                + w10 * raw[i10 + 1] as f64 * a10
+                + w01 * raw[i01 + 1] as f64 * a01
+                + w11 * raw[i11 + 1] as f64 * a11)
+                / aa_safe,
+            b: (w00 * raw[i00 + 2] as f64 * a00
+                + w10 * raw[i10 + 2] as f64 * a10
+                + w01 * raw[i01 + 2] as f64 * a01
+                + w11 * raw[i11 + 2] as f64 * a11)
+                / aa_safe,
+            a: aa,
+        };
+    }
+
+    let p00 = safe_pixel(img, xx, yy);
+    let p10 = safe_pixel(img, xx + 1, yy);
+    let p01 = safe_pixel(img, xx, yy + 1);
+    let p11 = safe_pixel(img, xx + 1, yy + 1);
 
     let a00 = p00[3] as f64;
     let a10 = p10[3] as f64;
