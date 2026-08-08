@@ -8,7 +8,7 @@ use crate::{
     error::{Error, Result},
     input::{Input, Inputs},
     mapping::Mapping,
-    pixer::{Pixer, distance, sample_linear},
+    pixer::{Pixer, sample_linear},
 };
 
 static RENDER_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -165,9 +165,14 @@ impl Render {
                             y13 = mdy[1] as f64 + 256.0 * ymod3 as f64 - RR;
                         }
 
-                        let da = distance(x1, y1, x12, y12);
-                        let db = distance(x1, y1, x13, y13);
-                        if da > 400.0 || db > 400.0 {
+                        // Compare squared distance against the 400.0 threshold to
+                        // avoid two `sqrt` calls per pixel in this warp branch.
+                        // (da < 400  <=>  da^2 < 160000).
+                        let dax = x1 - x12;
+                        let day = y1 - y12;
+                        let dbx = x1 - x13;
+                        let dby = y1 - y13;
+                        if dax * dax + day * day > 160_000.0 || dbx * dbx + dby * dby > 160_000.0 {
                             x12 = x1;
                             y12 = y1;
                             x13 = x1;
