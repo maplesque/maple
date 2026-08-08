@@ -1,6 +1,6 @@
 [package]
 name = "maple-render-core"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.80"
 description = "Core rendering and animation logic for maple templates"
@@ -22,3 +22,12 @@ imageproc = "0.25"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies.rayon]
 version = "1.10"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.webp-animation]
+version = "0.10"
+features = ["static"]
+optional = true
+
+[features]
+default = ["webp"]
+webp = ["dep:webp-animation"]
