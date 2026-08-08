@@ -294,11 +294,13 @@ fn main() -> Result<()> {
             let render = renders.get_render(first)?;
             let img = render.get().clone();
 
-            let mut options = WebpOptions::default();
-            options.quality = cli.webp_quality.clamp(0.0, 100.0);
-            options.lossless = cli.webp_lossless;
-            if let Some(m) = cli.webp_method {
-                options.method = m as usize;
+            let mut options = WebpOptions {
+                quality: cli.webp_quality.clamp(0.0, 100.0),
+                lossless: cli.webp_lossless,
+                ..WebpOptions::default()
+            };
+            if let Some(method) = cli.webp_method {
+                options.method = usize::from(method);
             }
 
             let data = WebpAnim::encode_single(&img, &options)
@@ -352,11 +354,13 @@ fn main() -> Result<()> {
                 anim.set_first_frame(start);
             }
 
-            let mut options = WebpOptions::default();
-            options.quality = cli.webp_quality.clamp(0.0, 100.0);
-            options.lossless = cli.webp_lossless;
-            if let Some(m) = cli.webp_method {
-                options.method = m as usize;
+            let mut options = WebpOptions {
+                quality: cli.webp_quality.clamp(0.0, 100.0),
+                lossless: cli.webp_lossless,
+                ..WebpOptions::default()
+            };
+            if let Some(method) = cli.webp_method {
+                options.method = usize::from(method);
             }
             anim.set_options(options);
 
