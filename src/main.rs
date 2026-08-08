@@ -17,6 +17,7 @@ use maple_render_core::{
     renders::Renders,
     repository::Repository,
     vid_anim::VidAnim,
+    webp_anim::{WebpAnim, WebpOptions},
 };
 use serde::Deserialize;
 
@@ -38,6 +39,10 @@ Examples:
   maple --zip foo.zip --in layer1.png --start 10
   maple --zip foo.zip --in layer1.png --save \"frame_%06d.jpg\"
   maple --zip foo.zip --in layer1.png --gif example.gif
+  maple --zip foo.zip --in layer1.png --webp out.webp
+  maple --zip foo.zip --in layer1.png --webp out.webp --webp-quality 90
+  maple --zip foo.zip --in layer1.png --webp out.webp --webp-lossless
+  maple --zip foo.zip --in layer1.png --webp-single frame.webp
   maple --zip foo.zip --in layer1.png --stats
   maple --zip foo.zip --in layer1.png --files
 ")]
@@ -62,9 +67,29 @@ struct Cli {
     #[arg(long)]
     vid: Option<PathBuf>,
 
+    /// Output animated WebP path (native builds only; no banding, full color)
+    #[arg(long)]
+    webp: Option<PathBuf>,
+
+    /// WebP lossy quality 0..=100 (default 95; only for --webp)
+    #[arg(long, default_value_t = 95.0)]
+    webp_quality: f32,
+
+    /// WebP lossy method 0..=6 (default 4; 0=fastest. only for --webp)
+    #[arg(long, value_parser = clap::value_parser!(u8).range(..=6))]
+    webp_method: Option<u8>,
+
+    /// Use lossless WebP encoding (only for --webp)
+    #[arg(long)]
+    webp_lossless: bool,
+
     /// Save individual frames (printf format, e.g., "frame_%06d.jpg")
     #[arg(long)]
     save: Option<String>,
+
+    /// Save a single frame as a WebP image (lossy, default quality 95)
+    #[arg(long)]
+    webp_single: Option<PathBuf>,
 
     /// Output width
     #[arg(long, short = 'w')]
@@ -263,6 +288,38 @@ fn main() -> Result<()> {
         }
     }
 
+    if let Some(webp_path) = &cli.webp_single {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let render = renders.get_render(first)?;
+            let img = render.get().clone();
+
+            let mut options = WebpOptions::default();
+            options.quality = cli.webp_quality.clamp(0.0, 100.0);
+            options.lossless = cli.webp_lossless;
+            if let Some(m) = cli.webp_method {
+                options.method = m as usize;
+            }
+
+            let data = WebpAnim::encode_single(&img, &options)
+                .map_err(|e| eyre!("Failed to encode single WebP frame: {}", e))?;
+
+            std::fs::write(webp_path, &data).wrap_err_with(|| {
+                format!("Failed to save WebP frame to {}", webp_path.display())
+            })?;
+            eprintln!("Saved single WebP frame to {}", webp_path.display());
+
+            // If the only requested output was the single frame, we are done.
+            if cli.gif.is_none() && cli.vid.is_none() && cli.webp.is_none() {
+                return Ok(());
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            return Err(eyre!("WebP output is not available in the WASM build"));
+        }
+    }
+
     if let Some(gif_path) = &cli.gif {
         let mut anim = GifAnim::new(renders);
 
@@ -281,6 +338,38 @@ fn main() -> Result<()> {
 
         eprintln!("Saved GIF to {}", gif_path.display());
         return Ok(());
+    }
+
+    if let Some(webp_path) = &cli.webp {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let repo_ref = Repository::load(zip_path)
+                .wrap_err_with(|| format!("Failed to reload template: {}", zip_path.display()))?;
+            let mut anim = WebpAnim::new(renders);
+            anim.set_timing(repo_ref.get_period(), repo_ref.get_hold());
+
+            if let Some(start) = cli.start {
+                anim.set_first_frame(start);
+            }
+
+            let mut options = WebpOptions::default();
+            options.quality = cli.webp_quality.clamp(0.0, 100.0);
+            options.lossless = cli.webp_lossless;
+            if let Some(m) = cli.webp_method {
+                options.method = m as usize;
+            }
+            anim.set_options(options);
+
+            anim.save(webp_path)
+                .wrap_err_with(|| format!("Failed to save WebP to {}", webp_path.display()))?;
+
+            eprintln!("Saved WebP to {}", webp_path.display());
+            return Ok(());
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            return Err(eyre!("WebP output is not available in the WASM build"));
+        }
     }
 
     if let Some(vid_path) = &cli.vid {
