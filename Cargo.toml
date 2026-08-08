@@ -1,6 +1,6 @@
 [package]
 name = "maple"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.80"
 
@@ -28,6 +28,7 @@ path = "src/main.rs"
 lto = "fat"
 codegen-units = 1
 panic = "abort"
+strip = "symbols"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies.mimalloc]
 version = "0.1"
