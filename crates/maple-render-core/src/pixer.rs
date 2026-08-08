@@ -2,10 +2,10 @@ use image::{Rgba, RgbaImage};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Pixer {
-    pub r: f64,
-    pub g: f64,
-    pub b: f64,
-    pub a: f64,
+    pub r: f32,
+    pub g: f32,
+    pub b: f32,
+    pub a: f32,
 }
 
 impl Pixer {
@@ -16,7 +16,7 @@ impl Pixer {
 
     #[inline(always)]
     pub fn from_rgba(pixel: &Rgba<u8>) -> Self {
-        Pixer { r: pixel[0] as f64, g: pixel[1] as f64, b: pixel[2] as f64, a: pixel[3] as f64 }
+        Pixer { r: pixel[0] as f32, g: pixel[1] as f32, b: pixel[2] as f32, a: pixel[3] as f32 }
     }
 
     #[inline(always)]
@@ -32,7 +32,7 @@ impl Pixer {
     }
 
     #[inline(always)]
-    pub fn postblend(&mut self, scale: f64) {
+    pub fn postblend(&mut self, scale: f32) {
         if scale > 0.0001 {
             self.r /= scale;
             self.g /= scale;
@@ -52,20 +52,20 @@ impl Pixer {
     }
 
     pub fn add_rgba(&mut self, pixel: &Rgba<u8>) {
-        self.r += pixel[0] as f64;
-        self.g += pixel[1] as f64;
-        self.b += pixel[2] as f64;
-        self.a += pixel[3] as f64;
+        self.r += pixel[0] as f32;
+        self.g += pixel[1] as f32;
+        self.b += pixel[2] as f32;
+        self.a += pixel[3] as f32;
     }
 
-    pub fn scale(&mut self, factor: f64) {
+    pub fn scale(&mut self, factor: f32) {
         self.r *= factor;
         self.g *= factor;
         self.b *= factor;
         self.a *= factor;
     }
 
-    pub fn div(&mut self, factor: f64) {
+    pub fn div(&mut self, factor: f32) {
         if factor.abs() > 0.0001 {
             self.r /= factor;
             self.g /= factor;
@@ -92,18 +92,18 @@ impl std::ops::AddAssign for Pixer {
     }
 }
 
-impl std::ops::Mul<f64> for Pixer {
+impl std::ops::Mul<f32> for Pixer {
     type Output = Pixer;
 
-    fn mul(self, factor: f64) -> Pixer {
+    fn mul(self, factor: f32) -> Pixer {
         Pixer { r: self.r * factor, g: self.g * factor, b: self.b * factor, a: self.a * factor }
     }
 }
 
-impl std::ops::Div<f64> for Pixer {
+impl std::ops::Div<f32> for Pixer {
     type Output = Pixer;
 
-    fn div(self, factor: f64) -> Pixer {
+    fn div(self, factor: f32) -> Pixer {
         if factor.abs() > 0.0001 {
             Pixer { r: self.r / factor, g: self.g / factor, b: self.b / factor, a: self.a / factor }
         } else {
@@ -113,7 +113,7 @@ impl std::ops::Div<f64> for Pixer {
 }
 
 #[inline]
-fn clamp_u8(v: f64) -> u8 {
+fn clamp_u8(v: f32) -> u8 {
     if v <= 0.0 {
         0
     } else if v >= 255.0 {
@@ -135,7 +135,12 @@ pub fn safe_pixel(img: &RgbaImage, x: i32, y: i32) -> Rgba<u8> {
     }
 }
 
-/// Bilinear interpolation with alpha-weighted averaging
+/// Bilinear interpolation with alpha-weighted averaging.
+///
+/// Coordinates remain `f64` for sub-pixel accuracy (the heavy lifting is the
+/// per-pixel color blend, which is performed in `f32` for throughput). The
+/// `f64` geometry inputs are down-cast to `f32` when constructing the returned
+/// `Pixer`.
 #[inline(always)]
 pub fn sample_linear(img: &RgbaImage, x: f64, y: f64) -> Pixer {
     let xx = x.floor() as i32;
@@ -143,10 +148,10 @@ pub fn sample_linear(img: &RgbaImage, x: f64, y: f64) -> Pixer {
     let fx = x - xx as f64;
     let fy = y - yy as f64;
 
-    let w00 = (1.0 - fx) * (1.0 - fy);
-    let w10 = fx * (1.0 - fy);
-    let w01 = (1.0 - fx) * fy;
-    let w11 = fx * fy;
+    let w00 = ((1.0 - fx) * (1.0 - fy)) as f32;
+    let w10 = (fx * (1.0 - fy)) as f32;
+    let w01 = ((1.0 - fx) * fy) as f32;
+    let w11 = (fx * fy) as f32;
 
     let w = img.width() as i32;
     let h = img.height() as i32;
@@ -165,29 +170,29 @@ pub fn sample_linear(img: &RgbaImage, x: f64, y: f64) -> Pixer {
         let i01 = row1 + col;
         let i11 = i01 + 4;
 
-        let a00 = raw[i00 + 3] as f64;
-        let a10 = raw[i10 + 3] as f64;
-        let a01 = raw[i01 + 3] as f64;
-        let a11 = raw[i11 + 3] as f64;
+        let a00 = raw[i00 + 3] as f32;
+        let a10 = raw[i10 + 3] as f32;
+        let a01 = raw[i01 + 3] as f32;
+        let a11 = raw[i11 + 3] as f32;
 
         let aa = w00 * a00 + w10 * a10 + w01 * a01 + w11 * a11;
         let aa_safe = if aa < 0.0001 { 0.0001 } else { aa };
 
         return Pixer {
-            r: (w00 * raw[i00] as f64 * a00
-                + w10 * raw[i10] as f64 * a10
-                + w01 * raw[i01] as f64 * a01
-                + w11 * raw[i11] as f64 * a11)
+            r: (w00 * raw[i00] as f32 * a00
+                + w10 * raw[i10] as f32 * a10
+                + w01 * raw[i01] as f32 * a01
+                + w11 * raw[i11] as f32 * a11)
                 / aa_safe,
-            g: (w00 * raw[i00 + 1] as f64 * a00
-                + w10 * raw[i10 + 1] as f64 * a10
-                + w01 * raw[i01 + 1] as f64 * a01
-                + w11 * raw[i11 + 1] as f64 * a11)
+            g: (w00 * raw[i00 + 1] as f32 * a00
+                + w10 * raw[i10 + 1] as f32 * a10
+                + w01 * raw[i01 + 1] as f32 * a01
+                + w11 * raw[i11 + 1] as f32 * a11)
                 / aa_safe,
-            b: (w00 * raw[i00 + 2] as f64 * a00
-                + w10 * raw[i10 + 2] as f64 * a10
-                + w01 * raw[i01 + 2] as f64 * a01
-                + w11 * raw[i11 + 2] as f64 * a11)
+            b: (w00 * raw[i00 + 2] as f32 * a00
+                + w10 * raw[i10 + 2] as f32 * a10
+                + w01 * raw[i01 + 2] as f32 * a01
+                + w11 * raw[i11 + 2] as f32 * a11)
                 / aa_safe,
             a: aa,
         };
@@ -198,29 +203,29 @@ pub fn sample_linear(img: &RgbaImage, x: f64, y: f64) -> Pixer {
     let p01 = safe_pixel(img, xx, yy + 1);
     let p11 = safe_pixel(img, xx + 1, yy + 1);
 
-    let a00 = p00[3] as f64;
-    let a10 = p10[3] as f64;
-    let a01 = p01[3] as f64;
-    let a11 = p11[3] as f64;
+    let a00 = p00[3] as f32;
+    let a10 = p10[3] as f32;
+    let a01 = p01[3] as f32;
+    let a11 = p11[3] as f32;
 
     let aa = w00 * a00 + w10 * a10 + w01 * a01 + w11 * a11;
     let aa_safe = if aa < 0.0001 { 0.0001 } else { aa };
 
     Pixer {
-        r: (w00 * p00[0] as f64 * a00
-            + w10 * p10[0] as f64 * a10
-            + w01 * p01[0] as f64 * a01
-            + w11 * p11[0] as f64 * a11)
+        r: (w00 * p00[0] as f32 * a00
+            + w10 * p10[0] as f32 * a10
+            + w01 * p01[0] as f32 * a01
+            + w11 * p11[0] as f32 * a11)
             / aa_safe,
-        g: (w00 * p00[1] as f64 * a00
-            + w10 * p10[1] as f64 * a10
-            + w01 * p01[1] as f64 * a01
-            + w11 * p11[1] as f64 * a11)
+        g: (w00 * p00[1] as f32 * a00
+            + w10 * p10[1] as f32 * a10
+            + w01 * p01[1] as f32 * a01
+            + w11 * p11[1] as f32 * a11)
             / aa_safe,
-        b: (w00 * p00[2] as f64 * a00
-            + w10 * p10[2] as f64 * a10
-            + w01 * p01[2] as f64 * a01
-            + w11 * p11[2] as f64 * a11)
+        b: (w00 * p00[2] as f32 * a00
+            + w10 * p10[2] as f32 * a10
+            + w01 * p01[2] as f32 * a01
+            + w11 * p11[2] as f32 * a11)
             / aa_safe,
         a: aa,
     }
