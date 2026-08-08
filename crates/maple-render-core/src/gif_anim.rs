@@ -159,12 +159,7 @@ impl GifAnim {
             if change {
                 let delay = step_pending.saturating_sub(step);
                 let emitted_indices = std::mem::replace(&mut prev_indices, curr_indices);
-                self.blocks.push(GifBlock {
-                    data: emitted_indices,
-                    delay,
-                    width: ww,
-                    height: hh,
-                });
+                self.blocks.push(GifBlock { data: emitted_indices, delay, width: ww, height: hh });
                 step_pending = step;
                 _emit_ct += 1;
             } else {
