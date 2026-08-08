@@ -16,6 +16,7 @@ static RENDER_COUNT: AtomicUsize = AtomicUsize::new(0);
 const RR: f64 = 2048.0; // Half of coordinate range (4096/2)
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum RenderQuality {
     None,
     Simple,
@@ -39,7 +40,6 @@ pub struct Render {
     mapping: Option<Mapping>,
     out: RgbaImage,
     out_scaled: Option<RgbaImage>,
-    #[allow(dead_code)]
     quality: RenderQuality,
 }
 
@@ -291,7 +291,6 @@ impl Render {
         Ok(())
     }
 
-    #[allow(dead_code)]
     fn add_simple(&mut self, input: &Input) -> Result<()> {
         let mapping = self.mapping.as_ref().ok_or(Error::NoMapping)?;
 
@@ -463,8 +462,18 @@ impl Render {
     pub fn apply_scaled(&mut self, inputs: &Inputs, w: i32, h: i32) -> Result<()> {
         self.pre()?;
 
-        for input in inputs.iter() {
-            self.add(input)?;
+        match self.quality {
+            RenderQuality::None => {}
+            RenderQuality::Simple => {
+                for input in inputs.iter() {
+                    self.add_simple(input)?;
+                }
+            }
+            RenderQuality::Sampled => {
+                for input in inputs.iter() {
+                    self.add(input)?;
+                }
+            }
         }
 
         self.post()?;
