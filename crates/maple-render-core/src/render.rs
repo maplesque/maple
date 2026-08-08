@@ -375,7 +375,6 @@ impl Render {
         RENDER_COUNT.fetch_add(1, Ordering::SeqCst);
 
         let mapping = self.mapping.as_ref().ok_or(Error::NoMapping)?;
-        let pre = self.out.clone();
         let w = self.out.width() as i32;
         let h = self.out.height() as i32;
 
@@ -389,6 +388,18 @@ impl Render {
         if mapping.map2.width() != mapping.neutral.width() {
             return Ok(());
         }
+
+        // The edge-smoothing pass only does work for pixels whose `sel` map
+        // channel 2 (the "smooth" flag) is nonzero. When that channel is zero
+        // everywhere (as it is for most shipped templates), the entire pass is
+        // a no-op — but it still clones the full output image and scans every
+        // pixel. Detect that cheaply and bail out early to avoid the clone
+        // and the scan.
+        if !mapping.has_nonzero_smoothing() {
+            return Ok(());
+        }
+
+        let pre = self.out.clone();
 
         for y in 0..h {
             for x in 0..w {

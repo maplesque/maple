@@ -2,7 +2,6 @@ use std::{
     collections::HashMap,
     io::{Cursor, Read, Seek},
 };
-
 #[cfg(not(target_arch = "wasm32"))]
 use std::{fs::File, io::BufReader, path::Path};
 
@@ -97,6 +96,7 @@ impl Repository {
             map1_name: map_name,
             map2_name: sel_name,
             neutral_name: transparent_name,
+            smooth_cache: std::sync::OnceLock::new(),
         })
     }
 
