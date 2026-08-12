@@ -89,8 +89,8 @@ back-tattoo, billboard-cityscape, book, circuitboard, flag, flag2, fortune-cooki
 
 ## Benchmarks
 
-Template parsing, frame compositing, color quantization and GIF encoding are
-benchmarked with [divan](https://github.com/nvzqz/divan) in `benches/` and
+Template parsing, frame compositing, color quantization and GIF/WebP encoding
+are benchmarked with [divan](https://github.com/nvzqz/divan) in `benches/` and
 tracked on every push and pull request by
 [CodSpeed](https://app.codspeed.io/taskylizard/maple).
 

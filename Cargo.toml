@@ -39,6 +39,10 @@ harness = false
 name = "pipeline"
 harness = false
 
+[[bench]]
+name = "webp"
+harness = false
+
 [profile.release]
 lto = "fat"
 codegen-units = 1

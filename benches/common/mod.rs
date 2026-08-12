@@ -79,6 +79,19 @@ pub fn renders(template: &str, image: &str, quality: RenderQuality) -> Renders {
     Renders::new(repository(template), inputs(image), quality)
 }
 
+/// The same pipeline with every frame composited up front, so that a benchmark
+/// can measure serialization on its own. [`Renders`] composites frames lazily
+/// on first access, which would otherwise be counted with the encoding.
+pub fn warm_renders(template: &str, image: &str, quality: RenderQuality) -> Renders {
+    let mut renders = renders(template, image, quality);
+
+    for frame in 0..renders.length() as i32 {
+        renders.get_render(frame).expect("composite frame");
+    }
+
+    renders
+}
+
 pub fn font() -> Vec<u8> {
     std::fs::read(asset("fonts/DejaVuSans-Bold.ttf")).expect("read font")
 }
