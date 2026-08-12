@@ -21,7 +21,7 @@ wasm-bindgen = "0.2"
 serde-wasm-bindgen = "0.6"
 
 [dev-dependencies]
-divan = { version = "4.7.0", package = "codspeed-divan-compat" }
+divan = { version = "=5.0.1", package = "codspeed-divan-compat" }
 
 [[bin]]
 name = "maple"

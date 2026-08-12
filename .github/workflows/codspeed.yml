@@ -18,33 +18,37 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_TARGET_DIR: target
-  # `.cargo/config.toml` builds with `-C target-cpu=native`, which on these
-  # runners emits AVX-512 instructions the CPU simulator cannot execute. Pin a
-  # fixed baseline instead: AVX2-era codegen that stays comparable across runs.
-  RUSTFLAGS: -C target-cpu=x86-64-v3
+  RUSTFLAGS: -C target-cpu=generic
 
 jobs:
   benchmarks:
     name: Run benchmarks
-    runs-on: ubuntu-latest
+    # CodSpeed macro runners are not available to personal GitHub accounts.
+    # Use GitHub's public ARM64 pool instead of the mixed AMD x64 hosts that
+    # made otherwise identical runs incomparable.
+    runs-on: ubuntu-24.04-arm
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.0.0
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.97.1
 
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Install cargo-codspeed
-        run: cargo install cargo-codspeed --locked
+        run: cargo install cargo-codspeed --version 5.0.1 --locked
 
       - name: Build the benchmarks
-        run: cargo codspeed build --profile codspeed --measurement-mode simulation
+        run: cargo codspeed build --profile codspeed --measurement-mode walltime --locked --jobs 1
 
       - name: Run the benchmarks
-        uses: CodSpeedHQ/action@v5
+        uses: CodSpeedHQ/action@4296e51e7041e24dadb86d1d6e8b9320d223dbe8 # v5.0.3
         with:
-          mode: simulation
-          run: cargo codspeed run
+          # The end-to-end GIF/WebP benchmarks spend substantial time in
+          # syscalls, which CPU Simulation deliberately excludes.
+          mode: walltime
+          run: cargo codspeed run --measurement-mode walltime

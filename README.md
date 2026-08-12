@@ -106,9 +106,9 @@ tracked on every push and pull request by
 cargo bench
 
 # Same benchmarks, measured the way CI measures them
-cargo install cargo-codspeed
-cargo codspeed build --profile codspeed --measurement-mode simulation
-cargo codspeed run
+cargo install cargo-codspeed --version 5.0.1 --locked
+cargo codspeed build --profile codspeed --measurement-mode walltime --locked
+cargo codspeed run --measurement-mode walltime
 ```
 
 ## License
