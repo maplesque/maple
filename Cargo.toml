@@ -20,15 +20,43 @@ maple-render-core = { path = "crates/maple-render-core", version = "0.2.0" }
 wasm-bindgen = "0.2"
 serde-wasm-bindgen = "0.6"
 
+[dev-dependencies]
+divan = { version = "4.7.0", package = "codspeed-divan-compat" }
+
 [[bin]]
 name = "maple"
 path = "src/main.rs"
+
+[[bench]]
+name = "render"
+harness = false
+
+[[bench]]
+name = "quantize"
+harness = false
+
+[[bench]]
+name = "pipeline"
+harness = false
+
+[[bench]]
+name = "webp"
+harness = false
 
 [profile.release]
 lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = "symbols"
+
+# Profile for the CodSpeed benchmarks: release-grade codegen, plus debug symbols
+# so profiles and flame graphs are readable. `panic = "unwind"` is required
+# because benchmark harnesses cannot be built with `panic = "abort"`.
+[profile.codspeed]
+inherits = "release"
+debug = true
+strip = "none"
+panic = "unwind"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies.mimalloc]
 version = "0.1"
