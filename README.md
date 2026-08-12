@@ -1,5 +1,7 @@
 <img width="1300" height="500" alt="image" src="https://github.com/user-attachments/assets/df818959-85a3-4cb9-ae9f-08f18ef49684" />
 
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/taskylizard/maple?utm_source=badge)
+
 ---
 
 maple allows you to composite images/text with templates into animated GIFs/Videos. `templates/` has some fun ones to try!
@@ -84,6 +86,23 @@ maple --zip templates/book.zip --in front.png back.png --vid book.mp4
 ## Included Templates
 
 back-tattoo, billboard-cityscape, book, circuitboard, flag, flag2, fortune-cookie, heart-locket, rubiks, toaster, valentine
+
+## Benchmarks
+
+Template parsing, frame compositing, color quantization and GIF encoding are
+benchmarked with [divan](https://github.com/nvzqz/divan) in `benches/` and
+tracked on every push and pull request by
+[CodSpeed](https://app.codspeed.io/taskylizard/maple).
+
+```bash
+# Wall-clock numbers
+cargo bench
+
+# Same benchmarks, measured the way CI measures them
+cargo install cargo-codspeed
+cargo codspeed build --profile codspeed --measurement-mode simulation
+cargo codspeed run
+```
 
 ## License
 

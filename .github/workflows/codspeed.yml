@@ -1,0 +1,50 @@
+name: CodSpeed
+
+on:
+  push:
+    branches:
+      - trunk
+      - main
+  # Required to get performance reports on pull requests.
+  pull_request:
+  # Lets CodSpeed trigger backtest runs to generate initial data.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # OpenID Connect authentication with CodSpeed.
+  id-token: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: target
+  # `.cargo/config.toml` builds with `-C target-cpu=native`, which on these
+  # runners emits AVX-512 instructions the CPU simulator cannot execute. Pin a
+  # fixed baseline instead: AVX2-era codegen that stays comparable across runs.
+  RUSTFLAGS: -C target-cpu=x86-64-v3
+
+jobs:
+  benchmarks:
+    name: Run benchmarks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-codspeed
+        run: cargo install cargo-codspeed --locked
+
+      - name: Build the benchmarks
+        run: cargo codspeed build --profile codspeed --measurement-mode simulation
+
+      - name: Run the benchmarks
+        uses: CodSpeedHQ/action@v5
+        with:
+          mode: simulation
+          run: cargo codspeed run
