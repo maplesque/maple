@@ -13,6 +13,16 @@ This crate contains:
 It intentionally does **not** bundle templates or font assets.
 For text rendering, callers must pass font bytes into `Input::from_text`.
 
+## Animated WebP
+
+`WebpAnim` and `WebpEncoder` use libwebp's animation encoder sequentially. This is the default path because it keeps memory bounded and performs animation-wide compression.
+
+`encode_webp_animation` is an opt-in batch API for callers that already hold complete RGBA frames. It detects dirty rectangles and encodes them concurrently with Rayon. This can reduce encoding time by roughly an order of magnitude on multicore machines, but it retains all source frames and can produce materially larger files because each rectangle is compressed independently. Benchmark both output size and latency for your workload before selecting it.
+
+The native `libwebp-sys` dependency is pinned exactly at 0.14.4. Its bundled libwebp 1.6.0 synchronizes lazy DSP initialization on Unix; Maple performs a one-time serialized warm-up on Windows, where that release uses an unsynchronized fallback. Upgrading the binding requires re-reviewing that initialization contract.
+
+WebP APIs are native-only and are excluded from `wasm32` builds.
+
 ## Minimal usage
 
 ```rust

@@ -9,7 +9,7 @@ mod common;
 
 use divan::Bencher;
 use maple::render::RenderQuality;
-use maple_render_core::webp_anim::{WebpAnim, WebpOptions};
+use maple_render_core::webp_anim::{WebpAnim, WebpFrame, WebpOptions, encode_webp_animation};
 
 fn main() {
     common::init();
@@ -23,6 +23,10 @@ fn lossy() -> WebpOptions {
 
 fn lossless() -> WebpOptions {
     WebpOptions { lossless: true, ..WebpOptions::default() }
+}
+
+fn fast_lossy() -> WebpOptions {
+    WebpOptions { quality: 85.0, method: 0, ..WebpOptions::default() }
 }
 
 fn anim(template: &str, image: &str, options: WebpOptions) -> WebpAnim {
@@ -43,6 +47,20 @@ fn warm_anim(template: &str, image: &str, options: WebpOptions) -> WebpAnim {
     anim
 }
 
+struct BatchAnimation {
+    dimensions: (u32, u32),
+    frames: Vec<Vec<u8>>,
+}
+
+fn batch_anim(template: &str, image: &str) -> BatchAnimation {
+    let mut renders = common::warm_renders(template, image, RenderQuality::Sampled);
+    let dimensions = renders.get_render(0).expect("first frame").get().dimensions();
+    let frames = (0..renders.length() as i32)
+        .map(|index| renders.get_render(index).expect("composited frame").get().as_raw().clone())
+        .collect();
+    BatchAnimation { dimensions, frames }
+}
+
 /// Full animated WebP: every frame is composited and handed to libwebp. This is
 /// what `maple --zip ... --webp out.webp` runs.
 #[divan::bench(sample_count = 3, sample_size = 1)]
@@ -59,6 +77,38 @@ fn webp_serialize(bencher: Bencher) {
     bencher
         .with_inputs(|| warm_anim("book", "frog.jpg", lossy()))
         .bench_local_refs(|anim| anim.encode().expect("webp encode"));
+}
+
+/// Bounded-memory method-0 serialization, matching the fast settings used by
+/// latency-sensitive consumers.
+#[divan::bench(sample_count = 3, sample_size = 1)]
+fn webp_serialize_fast(bencher: Bencher) {
+    bencher
+        .with_inputs(|| warm_anim("book", "frog.jpg", fast_lossy()))
+        .bench_local_refs(|anim| anim.encode().expect("webp encode"));
+}
+
+/// Batch method-0 serialization through the public high-throughput API. The
+/// benchmark runner fixes Rayon to one thread for deterministic CodSpeed
+/// results; local multicore runs can override `RAYON_NUM_THREADS`.
+#[divan::bench(sample_count = 3, sample_size = 1)]
+fn webp_batch_serialize_fast(bencher: Bencher) {
+    bencher.with_inputs(|| batch_anim("book", "frog.jpg")).bench_local_refs(|animation| {
+        let frames: Vec<_> = animation
+            .frames
+            .iter()
+            .enumerate()
+            .map(|(index, rgba)| WebpFrame::new(rgba, index as i32 * 40))
+            .collect();
+        encode_webp_animation(
+            animation.dimensions,
+            &frames,
+            frames.len() as i32 * 40,
+            fast_lossy(),
+            0,
+        )
+        .expect("batch WebP encode")
+    });
 }
 
 /// A single still frame through libwebp, the `--webp_single` path.

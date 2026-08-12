@@ -14,7 +14,7 @@ Core rendering logic now lives in the publishable [`maple-render-core`](crates/m
 cargo install --path .
 ```
 
-Requires Rust 1.80+. Video output requires ffmpeg.
+Requires Rust 1.88+. Video output requires ffmpeg.
 
 ## Core crate (publishable)
 
@@ -35,9 +35,13 @@ maple --zip <template.zip> --in <image.png> --gif out.gif
 | Flag                      | Description             |
 | ------------------------- | ----------------------- |
 | `--gif <path>`            | Animated GIF            |
+| `--webp <path>`           | Animated WebP           |
+| `--webp-single <path>`    | Single-frame WebP       |
 | `--vid <path>`            | Video (ffmpeg required) |
 | `--save "frame_%06d.jpg"` | Individual frames       |
 | `--single`                | Single frame only       |
+
+WebP output defaults to lossy quality 95 and compression method 4. Use `--webp-quality <0..100>`, `--webp-method <0..6>`, or `--webp-lossless` to override it.
 
 ### Transform
 
@@ -75,6 +79,9 @@ maple --json config.json
 ```bash
 # Photo to toaster GIF
 maple --zip templates/toaster.zip --in photo.jpg --gif out.gif
+
+# Full-color animated WebP
+maple --zip templates/toaster.zip --in photo.jpg --webp out.webp
 
 # Text billboard
 maple --zip templates/billboard-cityscape.zip --in "text:SALE" --gif ad.gif

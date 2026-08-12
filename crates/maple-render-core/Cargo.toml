@@ -1,8 +1,8 @@
 [package]
 name = "maple-render-core"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.88"
 description = "Core rendering and animation logic for maple templates"
 license = "MIT"
 repository = "https://github.com/taskylizard/maple"
@@ -23,11 +23,13 @@ imageproc = "0.25"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies.rayon]
 version = "1.10"
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies.webp-animation]
-version = "0.10"
-features = ["static"]
+# Pinned because Maple relies on this release's native initialization behavior.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.libwebp-sys]
+version = "=0.14.4"
+default-features = false
+features = ["std", "parallel"]
 optional = true
 
 [features]
 default = ["webp"]
-webp = ["dep:webp-animation"]
+webp = ["dep:libwebp-sys"]

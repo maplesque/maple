@@ -1,0 +1,20 @@
+[package]
+name = "maple-render-core-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+maple-render-core = { path = "../crates/maple-render-core" }
+image = { version = "0.25", default-features = false, features = ["webp"] }
+
+[[bin]]
+name = "webp_encoder"
+path = "fuzz_targets/webp_encoder.rs"
+test = false
+doc = false
+bench = false

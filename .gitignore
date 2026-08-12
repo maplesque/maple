@@ -1,3 +1,5 @@
 **/target
+fuzz/artifacts
+fuzz/corpus
 *.gif
 *.png
