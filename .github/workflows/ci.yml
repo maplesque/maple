@@ -7,6 +7,10 @@ on:
       - main
     tags:
       - "core-v*"
+  pull_request:
+    branches:
+      - trunk
+      - main
   workflow_dispatch:
     inputs:
       publish:
@@ -59,13 +63,62 @@ jobs:
       - name: Test maple-render-core standalone crate
         run: cargo test --manifest-path crates/maple-render-core/Cargo.toml
 
+      - name: Check maple-render-core without default features
+        run: cargo check --manifest-path crates/maple-render-core/Cargo.toml --no-default-features --all-targets
+
+      - name: Test maple-render-core without default features
+        run: cargo test --manifest-path crates/maple-render-core/Cargo.toml --no-default-features
+
       - name: Verify maple-render-core publish dry-run
         run: cargo publish --dry-run --allow-dirty --manifest-path crates/maple-render-core/Cargo.toml
+
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check native path
+        run: cargo check --locked
+
+      - name: Test native WebP path
+        run: cargo test --manifest-path crates/maple-render-core/Cargo.toml
+
+  msrv:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust 1.88
+        uses: dtolnay/rust-toolchain@1.88.0
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check root crate at minimum supported Rust version
+        run: cargo check --locked --all-targets
+
+      - name: Check standalone core at minimum supported Rust version
+        run: cargo check --manifest-path crates/maple-render-core/Cargo.toml --all-targets
+
+      - name: Check standalone core without default features at minimum supported Rust version
+        run: cargo check --manifest-path crates/maple-render-core/Cargo.toml --no-default-features --all-targets
 
   publish-maple-render-core:
     name: Publish maple-render-core
     runs-on: ubuntu-latest
-    needs: rust
+    needs: [rust, native, msrv]
     if: startsWith(github.ref, 'refs/tags/core-v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true')
 
     steps:

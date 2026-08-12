@@ -12,7 +12,7 @@ pub mod vid_anim;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod anim;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "webp", not(target_arch = "wasm32")))]
 pub mod webp_anim;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -26,5 +26,7 @@ pub use renders::Renders;
 pub use repository::Repository;
 pub use template::Template;
 pub use vid_anim::VidAnim;
-#[cfg(not(target_arch = "wasm32"))]
-pub use webp_anim::{WebpAnim, WebpOptions};
+#[cfg(all(feature = "webp", not(target_arch = "wasm32")))]
+pub use webp_anim::{
+    WebpAnim, WebpAnimationOptions, WebpEncoder, WebpFrame, WebpOptions, encode_webp_animation,
+};

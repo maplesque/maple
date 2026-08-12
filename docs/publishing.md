@@ -33,15 +33,12 @@ You can also publish from **Actions → CI → Run workflow**:
 
 ## What CI does before publish
 
-The `CI` workflow runs:
+The `CI` workflow requires all of these jobs before publishing:
 
-- `cargo fmt --all -- --check`
-- `cargo clippy --locked --all-targets -- -D warnings` (root crate)
-- `cargo check --locked` (root crate)
-- `cargo test --locked --lib` (root crate)
-- `cargo check --locked --lib --target wasm32-unknown-unknown` (root wasm exports)
-- `cargo check --manifest-path crates/maple-render-core/Cargo.toml`
-- `cargo test --manifest-path crates/maple-render-core/Cargo.toml`
-- `cargo publish --dry-run --allow-dirty --manifest-path crates/maple-render-core/Cargo.toml`
+- Linux formatting, Clippy, root checks/tests, and the WASM export check
+- Standalone core checks/tests with and without default features
+- A `maple-render-core` crates.io publish dry-run
+- Native root checks and core tests on macOS and Windows
+- Root and standalone core checks on Rust 1.88, including the core's no-default-feature targets
 
-Then it executes real publish when triggered by tag/manual publish mode.
+Then it executes the real publish when triggered by tag or manual publish mode.
