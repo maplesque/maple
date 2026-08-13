@@ -23,10 +23,9 @@ env:
 jobs:
   benchmarks:
     name: Run benchmarks
-    # CodSpeed macro runners are not available to personal GitHub accounts.
-    # Use GitHub's public ARM64 pool instead of the mixed AMD x64 hosts that
-    # made otherwise identical runs incomparable.
-    runs-on: ubuntu-24.04-arm
+    # Walltime requires CodSpeed's stable ARM64 bare-metal environment so
+    # syscall-heavy benchmarks include their complete elapsed time.
+    runs-on: codspeed-macro
 
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.0.0
@@ -38,6 +37,8 @@ jobs:
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: codspeed-${{ runner.arch }}
 
       - name: Install cargo-codspeed
         run: cargo install cargo-codspeed --version 5.0.1 --locked
