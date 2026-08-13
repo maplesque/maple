@@ -28,6 +28,7 @@ impl Default for TextOptions {
 #[derive(Clone)]
 pub struct Input {
     image: RgbaImage,
+    opaque: bool,
     pub layer: u8,
     pub xs: f64,
     pub ys: f64,
@@ -44,6 +45,7 @@ impl Default for Input {
     fn default() -> Self {
         Input {
             image: RgbaImage::new(1, 1),
+            opaque: false,
             layer: 1,
             xs: 1.0,
             ys: 1.0,
@@ -75,9 +77,10 @@ impl Input {
         }
 
         let img = image::open(path)?;
+        let opaque = !img.color().has_alpha();
         let rgba = img.to_rgba8();
 
-        let mut input = Input { image: rgba, layer, ..Default::default() };
+        let mut input = Input { image: rgba, opaque, layer, ..Default::default() };
 
         input.compute_scale_params();
 
@@ -85,7 +88,8 @@ impl Input {
     }
 
     pub fn from_image(image: RgbaImage, layer: u8) -> Self {
-        let mut input = Input { image, layer, ..Default::default() };
+        let opaque = image.pixels().all(|pixel| pixel[3] == 255);
+        let mut input = Input { image, opaque, layer, ..Default::default() };
         input.compute_scale_params();
         input
     }
@@ -146,7 +150,12 @@ impl Input {
     }
 
     pub fn get_mut(&mut self) -> &mut RgbaImage {
+        self.opaque = false;
         &mut self.image
+    }
+
+    pub fn is_opaque(&self) -> bool {
+        self.opaque
     }
 
     pub fn width(&self) -> u32 {
@@ -229,5 +238,23 @@ impl std::ops::Index<usize> for Inputs {
 impl std::ops::IndexMut<usize> for Inputs {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.data[index]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opacity_is_detected_and_invalidated_by_mutable_access() {
+        let image = RgbaImage::from_pixel(2, 2, Rgba([10, 20, 30, 255]));
+        let mut input = Input::from_image(image, 1);
+        assert!(input.is_opaque());
+
+        input.get_mut().put_pixel(0, 0, Rgba([10, 20, 30, 255]));
+        assert!(!input.is_opaque());
+
+        let image = RgbaImage::from_pixel(2, 2, Rgba([10, 20, 30, 254]));
+        assert!(!Input::from_image(image, 1).is_opaque());
     }
 }
