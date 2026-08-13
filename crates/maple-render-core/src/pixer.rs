@@ -231,6 +231,84 @@ pub fn sample_linear(img: &RgbaImage, x: f64, y: f64) -> Pixer {
     }
 }
 
+/// Bilinear interpolation in premultiplied-alpha space.
+///
+/// The sampled compositor combines several neighboring samples before
+/// converting back to straight alpha. Keeping RGB premultiplied here avoids a
+/// divide followed immediately by a multiply for every tap.
+#[inline(always)]
+pub(crate) fn sample_linear_premultiplied(img: &RgbaImage, x: f64, y: f64) -> Pixer {
+    let xx = x.floor() as i32;
+    let yy = y.floor() as i32;
+    let fx = x - xx as f64;
+    let fy = y - yy as f64;
+
+    let w00 = ((1.0 - fx) * (1.0 - fy)) as f32;
+    let w10 = (fx * (1.0 - fy)) as f32;
+    let w01 = ((1.0 - fx) * fy) as f32;
+    let w11 = (fx * fy) as f32;
+
+    let w = img.width() as i32;
+    let h = img.height() as i32;
+
+    if xx >= 0 && yy >= 0 && xx + 1 < w && yy + 1 < h {
+        let raw = img.as_raw();
+        let row_stride = w as usize * 4;
+
+        let i00 = yy as usize * row_stride + xx as usize * 4;
+        let i10 = i00 + 4;
+        let i01 = i00 + row_stride;
+        let i11 = i01 + 4;
+
+        let a00 = raw[i00 + 3] as f32;
+        let a10 = raw[i10 + 3] as f32;
+        let a01 = raw[i01 + 3] as f32;
+        let a11 = raw[i11 + 3] as f32;
+
+        return Pixer {
+            r: w00 * raw[i00] as f32 * a00
+                + w10 * raw[i10] as f32 * a10
+                + w01 * raw[i01] as f32 * a01
+                + w11 * raw[i11] as f32 * a11,
+            g: w00 * raw[i00 + 1] as f32 * a00
+                + w10 * raw[i10 + 1] as f32 * a10
+                + w01 * raw[i01 + 1] as f32 * a01
+                + w11 * raw[i11 + 1] as f32 * a11,
+            b: w00 * raw[i00 + 2] as f32 * a00
+                + w10 * raw[i10 + 2] as f32 * a10
+                + w01 * raw[i01 + 2] as f32 * a01
+                + w11 * raw[i11 + 2] as f32 * a11,
+            a: w00 * a00 + w10 * a10 + w01 * a01 + w11 * a11,
+        };
+    }
+
+    let p00 = safe_pixel(img, xx, yy);
+    let p10 = safe_pixel(img, xx + 1, yy);
+    let p01 = safe_pixel(img, xx, yy + 1);
+    let p11 = safe_pixel(img, xx + 1, yy + 1);
+
+    let a00 = p00[3] as f32;
+    let a10 = p10[3] as f32;
+    let a01 = p01[3] as f32;
+    let a11 = p11[3] as f32;
+
+    Pixer {
+        r: w00 * p00[0] as f32 * a00
+            + w10 * p10[0] as f32 * a10
+            + w01 * p01[0] as f32 * a01
+            + w11 * p11[0] as f32 * a11,
+        g: w00 * p00[1] as f32 * a00
+            + w10 * p10[1] as f32 * a10
+            + w01 * p01[1] as f32 * a01
+            + w11 * p11[1] as f32 * a11,
+        b: w00 * p00[2] as f32 * a00
+            + w10 * p10[2] as f32 * a10
+            + w01 * p01[2] as f32 * a01
+            + w11 * p11[2] as f32 * a11,
+        a: w00 * a00 + w10 * a10 + w01 * a01 + w11 * a11,
+    }
+}
+
 pub fn sample_weakly(img: &RgbaImage, x: f64, y: f64) -> Pixer {
     Pixer::from_rgba(&safe_pixel(img, x as i32, y as i32))
 }
