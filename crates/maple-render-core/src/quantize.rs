@@ -8,6 +8,7 @@ const HIST_C2_BITS: usize = 5; // B
 const HIST_C0_ELEMS: usize = 1 << HIST_C0_BITS;
 const HIST_C1_ELEMS: usize = 1 << HIST_C1_BITS;
 const HIST_C2_ELEMS: usize = 1 << HIST_C2_BITS;
+const HIST_ELEMS: usize = HIST_C0_ELEMS * HIST_C1_ELEMS * HIST_C2_ELEMS;
 
 const C0_SHIFT: usize = 8 - HIST_C0_BITS;
 const C1_SHIFT: usize = 8 - HIST_C1_BITS;
@@ -85,7 +86,7 @@ struct ColorBox {
 }
 
 pub struct Quantizer {
-    histogram: Box<[[[u16; HIST_C2_ELEMS]; HIST_C1_ELEMS]; HIST_C0_ELEMS]>,
+    histogram: Box<[u16; HIST_ELEMS]>,
     fserrors: Vec<i16>,
     error_limiter: Vec<i32>,
     on_odd_row: bool,
@@ -95,7 +96,7 @@ pub struct Quantizer {
 impl Quantizer {
     pub fn new(reference: &RgbaImage) -> Self {
         let mut q = Quantizer {
-            histogram: Box::new([[[0u16; HIST_C2_ELEMS]; HIST_C1_ELEMS]; HIST_C0_ELEMS]),
+            histogram: Box::new([0; HIST_ELEMS]),
             fserrors: Vec::new(),
             error_limiter: Vec::new(),
             on_odd_row: false,
@@ -146,13 +147,12 @@ impl Quantizer {
     }
 
     fn zero_histogram(&mut self) {
-        for c0 in 0..HIST_C0_ELEMS {
-            for c1 in 0..HIST_C1_ELEMS {
-                for c2 in 0..HIST_C2_ELEMS {
-                    self.histogram[c0][c1][c2] = 0;
-                }
-            }
-        }
+        self.histogram.fill(0);
+    }
+
+    #[inline(always)]
+    const fn histogram_index(c0: usize, c1: usize, c2: usize) -> usize {
+        (c0 * HIST_C1_ELEMS + c1) * HIST_C2_ELEMS + c2
     }
 
     fn prescan_quantize(&mut self, img: &RgbaImage) {
@@ -161,7 +161,7 @@ impl Quantizer {
             let g = (pixel[1] as usize) >> C1_SHIFT;
             let b = (pixel[2] as usize) >> C2_SHIFT;
 
-            let cell = &mut self.histogram[r][g][b];
+            let cell = &mut self.histogram[Self::histogram_index(r, g, b)];
             if *cell < u16::MAX {
                 *cell += 1;
             }
@@ -206,13 +206,20 @@ impl Quantizer {
         let mut occupied_c2max = original.c2min;
         let mut colorcount = 0;
 
+        let c2min = original.c2min as usize;
+        let c2_len = (original.c2max - original.c2min + 1) as usize;
+
         for c0 in original.c0min..=original.c0max {
             for c1 in original.c1min..=original.c1max {
-                for c2 in original.c2min..=original.c2max {
-                    if self.histogram[c0 as usize][c1 as usize][c2 as usize] == 0 {
+                let row_start = Self::histogram_index(c0 as usize, c1 as usize, c2min);
+                let row = &self.histogram[row_start..row_start + c2_len];
+
+                for (c2_offset, &count) in row.iter().enumerate() {
+                    if count == 0 {
                         continue;
                     }
 
+                    let c2 = original.c2min + c2_offset as i32;
                     occupied_c0min = occupied_c0min.min(c0);
                     occupied_c0max = occupied_c0max.max(c0);
                     occupied_c1min = occupied_c1min.min(c1);
@@ -313,7 +320,9 @@ impl Quantizer {
         for c0 in boxp.c0min..=boxp.c0max {
             for c1 in boxp.c1min..=boxp.c1max {
                 for c2 in boxp.c2min..=boxp.c2max {
-                    let count = self.histogram[c0 as usize][c1 as usize][c2 as usize] as i64;
+                    let count = self.histogram
+                        [Self::histogram_index(c0 as usize, c1 as usize, c2 as usize)]
+                        as i64;
                     if count != 0 {
                         total += count;
                         c0total += ((c0 << C0_SHIFT) + (1 << (C0_SHIFT - 1))) as i64 * count;
@@ -531,8 +540,9 @@ impl Quantizer {
         for ic0 in 0..BOX_C0_ELEMS {
             for ic1 in 0..BOX_C1_ELEMS {
                 for ic2 in 0..BOX_C2_ELEMS {
-                    self.histogram[base_c0 + ic0][base_c1 + ic1][base_c2 + ic2] =
-                        bestcolor[cptr_idx] as u16 + 1;
+                    let histogram_index =
+                        Self::histogram_index(base_c0 + ic0, base_c1 + ic1, base_c2 + ic2);
+                    self.histogram[histogram_index] = bestcolor[cptr_idx] as u16 + 1;
                     cptr_idx += 1;
                 }
             }
@@ -554,10 +564,11 @@ impl Quantizer {
                 let c1 = g >> C1_SHIFT;
                 let c2 = b >> C2_SHIFT;
 
-                let mut cached = self.histogram[c0][c1][c2];
+                let histogram_index = Self::histogram_index(c0, c1, c2);
+                let mut cached = self.histogram[histogram_index];
                 if cached == 0 {
                     self.fill_inverse_cmap(c0 as i32, c1 as i32, c2 as i32);
-                    cached = self.histogram[c0][c1][c2];
+                    cached = self.histogram[histogram_index];
                 }
 
                 output[y * width + x] = (cached - 1) as u8;
@@ -623,10 +634,11 @@ impl Quantizer {
                 let c1 = (cur1 as usize) >> C1_SHIFT;
                 let c2 = (cur2 as usize) >> C2_SHIFT;
 
-                let mut cached = self.histogram[c0][c1][c2];
+                let histogram_index = Self::histogram_index(c0, c1, c2);
+                let mut cached = self.histogram[histogram_index];
                 if cached == 0 {
                     self.fill_inverse_cmap(c0 as i32, c1 as i32, c2 as i32);
-                    cached = self.histogram[c0][c1][c2];
+                    cached = self.histogram[histogram_index];
                 }
 
                 let pixcode = (cached - 1) as usize;
