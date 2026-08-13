@@ -197,113 +197,47 @@ impl Quantizer {
     }
 
     fn update_box(&self, boxp: &mut ColorBox) {
-        let mut c0min = boxp.c0min;
-        let mut c0max = boxp.c0max;
-        let mut c1min = boxp.c1min;
-        let mut c1max = boxp.c1max;
-        let mut c2min = boxp.c2min;
-        let mut c2max = boxp.c2max;
+        let original = *boxp;
+        let mut occupied_c0min = original.c0max;
+        let mut occupied_c0max = original.c0min;
+        let mut occupied_c1min = original.c1max;
+        let mut occupied_c1max = original.c1min;
+        let mut occupied_c2min = original.c2max;
+        let mut occupied_c2max = original.c2min;
+        let mut colorcount = 0;
 
-        if c0max > c0min {
-            'outer: for c0 in c0min..=c0max {
-                for c1 in c1min..=c1max {
-                    for c2 in c2min..=c2max {
-                        if self.histogram[c0 as usize][c1 as usize][c2 as usize] != 0 {
-                            boxp.c0min = c0;
-                            c0min = c0;
-                            break 'outer;
-                        }
+        for c0 in original.c0min..=original.c0max {
+            for c1 in original.c1min..=original.c1max {
+                for c2 in original.c2min..=original.c2max {
+                    if self.histogram[c0 as usize][c1 as usize][c2 as usize] == 0 {
+                        continue;
                     }
+
+                    occupied_c0min = occupied_c0min.min(c0);
+                    occupied_c0max = occupied_c0max.max(c0);
+                    occupied_c1min = occupied_c1min.min(c1);
+                    occupied_c1max = occupied_c1max.max(c1);
+                    occupied_c2min = occupied_c2min.min(c2);
+                    occupied_c2max = occupied_c2max.max(c2);
+                    colorcount += 1;
                 }
             }
         }
 
-        if c0max > c0min {
-            'outer: for c0 in (c0min..=c0max).rev() {
-                for c1 in c1min..=c1max {
-                    for c2 in c2min..=c2max {
-                        if self.histogram[c0 as usize][c1 as usize][c2 as usize] != 0 {
-                            boxp.c0max = c0;
-                            c0max = c0;
-                            break 'outer;
-                        }
-                    }
-                }
-            }
+        if colorcount != 0 {
+            boxp.c0min = occupied_c0min;
+            boxp.c0max = occupied_c0max;
+            boxp.c1min = occupied_c1min;
+            boxp.c1max = occupied_c1max;
+            boxp.c2min = occupied_c2min;
+            boxp.c2max = occupied_c2max;
         }
 
-        if c1max > c1min {
-            'outer: for c1 in c1min..=c1max {
-                for c0 in c0min..=c0max {
-                    for c2 in c2min..=c2max {
-                        if self.histogram[c0 as usize][c1 as usize][c2 as usize] != 0 {
-                            boxp.c1min = c1;
-                            c1min = c1;
-                            break 'outer;
-                        }
-                    }
-                }
-            }
-        }
-
-        if c1max > c1min {
-            'outer: for c1 in (c1min..=c1max).rev() {
-                for c0 in c0min..=c0max {
-                    for c2 in c2min..=c2max {
-                        if self.histogram[c0 as usize][c1 as usize][c2 as usize] != 0 {
-                            boxp.c1max = c1;
-                            c1max = c1;
-                            break 'outer;
-                        }
-                    }
-                }
-            }
-        }
-
-        if c2max > c2min {
-            'outer: for c2 in c2min..=c2max {
-                for c0 in c0min..=c0max {
-                    for c1 in c1min..=c1max {
-                        if self.histogram[c0 as usize][c1 as usize][c2 as usize] != 0 {
-                            boxp.c2min = c2;
-                            c2min = c2;
-                            break 'outer;
-                        }
-                    }
-                }
-            }
-        }
-
-        if c2max > c2min {
-            'outer: for c2 in (c2min..=c2max).rev() {
-                for c0 in c0min..=c0max {
-                    for c1 in c1min..=c1max {
-                        if self.histogram[c0 as usize][c1 as usize][c2 as usize] != 0 {
-                            boxp.c2max = c2;
-                            c2max = c2;
-                            break 'outer;
-                        }
-                    }
-                }
-            }
-        }
-
-        let dist0 = ((c0max - c0min) << C0_SHIFT) as i64 * C0_SCALE as i64;
-        let dist1 = ((c1max - c1min) << C1_SHIFT) as i64 * C1_SCALE as i64;
-        let dist2 = ((c2max - c2min) << C2_SHIFT) as i64 * C2_SCALE as i64;
+        let dist0 = ((boxp.c0max - boxp.c0min) << C0_SHIFT) as i64 * C0_SCALE as i64;
+        let dist1 = ((boxp.c1max - boxp.c1min) << C1_SHIFT) as i64 * C1_SCALE as i64;
+        let dist2 = ((boxp.c2max - boxp.c2min) << C2_SHIFT) as i64 * C2_SCALE as i64;
         boxp.volume = dist0 * dist0 + dist1 * dist1 + dist2 * dist2;
-
-        let mut ccount: i64 = 0;
-        for c0 in c0min..=c0max {
-            for c1 in c1min..=c1max {
-                for c2 in c2min..=c2max {
-                    if self.histogram[c0 as usize][c1 as usize][c2 as usize] != 0 {
-                        ccount += 1;
-                    }
-                }
-            }
-        }
-        boxp.colorcount = ccount;
+        boxp.colorcount = colorcount;
     }
 
     fn median_cut(
