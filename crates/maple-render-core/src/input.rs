@@ -123,7 +123,11 @@ impl Input {
 
         draw_text_mut(&mut image, options.color, x, y, scale, &font, text);
 
-        Ok(Input::from_image(image, layer))
+        let opaque = options.color[3] == 255 && options.background[3] == 255;
+        let mut input = Input { image, opaque, layer, ..Default::default() };
+        input.compute_scale_params();
+
+        Ok(input)
     }
 
     fn compute_scale_params(&mut self) {
@@ -256,5 +260,22 @@ mod tests {
 
         let image = RgbaImage::from_pixel(2, 2, Rgba([10, 20, 30, 254]));
         assert!(!Input::from_image(image, 1).is_opaque());
+    }
+
+    #[test]
+    fn text_opacity_follows_foreground_and_background_alpha() {
+        let font = include_bytes!("../../../fonts/DejaVuSans-Bold.ttf");
+        let opaque = Input::from_text("opaque", 1, &TextOptions::default(), font)
+            .expect("render opaque text");
+        assert!(opaque.is_opaque());
+
+        for options in [
+            TextOptions { color: Rgba([0, 0, 0, 254]), ..Default::default() },
+            TextOptions { background: Rgba([255, 255, 255, 254]), ..Default::default() },
+        ] {
+            let transparent =
+                Input::from_text("transparent", 1, &options, font).expect("render text");
+            assert!(!transparent.is_opaque());
+        }
     }
 }
