@@ -197,16 +197,55 @@ impl Quantizer {
         (c0 * HIST_C1_ELEMS + c1) * HIST_C2_ELEMS + c2
     }
 
-    fn prescan_quantize(&mut self, img: &RgbaImage) {
-        for pixel in img.pixels() {
-            let r = (pixel[0] as usize) >> C0_SHIFT;
-            let g = (pixel[1] as usize) >> C1_SHIFT;
-            let b = (pixel[2] as usize) >> C2_SHIFT;
+    #[inline(always)]
+    fn histogram_index_of(pixel: &[u8; 4]) -> usize {
+        Self::histogram_index(
+            (pixel[0] as usize) >> C0_SHIFT,
+            (pixel[1] as usize) >> C1_SHIFT,
+            (pixel[2] as usize) >> C2_SHIFT,
+        )
+    }
 
-            let cell = &mut self.histogram[Self::histogram_index(r, g, b)];
+    fn prescan_quantize(&mut self, img: &RgbaImage) {
+        // The arithmetic per pixel is trivial; what costs is the scatter into
+        // the histogram. Neighbouring pixels of a photo usually land in the
+        // same cell, so a single table turns the scan into one long chain of
+        // store-to-load forwarded increments. Scattering even and odd pixels
+        // into two tables halves that chain; the tables are folded back
+        // together afterwards in one linear pass.
+        //
+        // Two lanes is the sweet spot: four makes the working set larger than
+        // the level of cache that keeps up, and loses more than the shorter
+        // chain wins.
+        let (pairs, tail) = img.as_raw().as_chunks::<8>();
+        let mut odd_counts = vec![0u16; HIST_ELEMS];
+
+        for pair in pairs {
+            let (pixels, _) = pair.as_chunks::<4>();
+            let even = Self::histogram_index_of(&pixels[0]);
+            let odd = Self::histogram_index_of(&pixels[1]);
+
+            let cell = &mut self.histogram[even];
             if *cell < u16::MAX {
                 *cell += 1;
             }
+
+            let cell = &mut odd_counts[odd];
+            if *cell < u16::MAX {
+                *cell += 1;
+            }
+        }
+
+        for pixel in tail.as_chunks::<4>().0 {
+            let cell = &mut self.histogram[Self::histogram_index_of(pixel)];
+            if *cell < u16::MAX {
+                *cell += 1;
+            }
+        }
+
+        // Folding the two halves back together is a linear, vectorizable pass.
+        for (cell, odd) in self.histogram.iter_mut().zip(odd_counts.iter()) {
+            *cell = cell.saturating_add(*odd);
         }
     }
 
