@@ -73,6 +73,48 @@ impl Palette {
     }
 }
 
+/// Bitmap of the occupied histogram cells, one `u32` per `(c0, c1)` row.
+///
+/// `HIST_C2_ELEMS` is exactly 32, so a whole row of the histogram fits in a
+/// single word and the 128 KB histogram condenses to 8 KB that stays in L1 for
+/// the entire median cut. The histogram is immutable while boxes are being
+/// split, so the bitmap is built once and stays valid for every split.
+struct Occupancy {
+    rows: Box<[u32; HIST_C0_ELEMS * HIST_C1_ELEMS]>,
+}
+
+const _: () = assert!(HIST_C2_ELEMS == u32::BITS as usize);
+const _: () = assert!(HIST_C0_ELEMS <= u32::BITS as usize);
+const _: () = assert!(HIST_C1_ELEMS <= u64::BITS as usize);
+
+impl Occupancy {
+    fn from_histogram(histogram: &[u16; HIST_ELEMS]) -> Self {
+        let mut rows = Box::new([0u32; HIST_C0_ELEMS * HIST_C1_ELEMS]);
+
+        for (bits, cells) in rows.iter_mut().zip(histogram.chunks_exact(HIST_C2_ELEMS)) {
+            let mut row = 0u32;
+            for (c2, &count) in cells.iter().enumerate() {
+                row |= ((count != 0) as u32) << c2;
+            }
+            *bits = row;
+        }
+
+        Occupancy { rows }
+    }
+
+    #[inline(always)]
+    fn row(&self, c0: i32, c1: i32) -> u32 {
+        self.rows[c0 as usize * HIST_C1_ELEMS + c1 as usize]
+    }
+
+    /// Mask of the `c2` bits a box spans.
+    #[inline(always)]
+    fn c2_mask(c2min: i32, c2max: i32) -> u32 {
+        let width = (c2max - c2min + 1) as u32;
+        if width >= u32::BITS { u32::MAX } else { ((1u32 << width) - 1) << c2min }
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 struct ColorBox {
     c0min: i32,
@@ -196,65 +238,40 @@ impl Quantizer {
         which
     }
 
-    fn update_box(&self, boxp: &mut ColorBox) {
+    fn update_box(&self, occupancy: &Occupancy, boxp: &mut ColorBox) {
         let original = *boxp;
-        let mut occupied_c0min = original.c0max;
-        let mut occupied_c0max = original.c0min;
-        let mut occupied_c1min = original.c1max;
-        let mut occupied_c1max = original.c1min;
-        let mut occupied_c2min = original.c2max;
-        let mut occupied_c2max = original.c2min;
-        let mut colorcount = 0;
+        let mask = Occupancy::c2_mask(original.c2min, original.c2max);
 
-        let c2_len = (original.c2max - original.c2min + 1) as usize;
+        // The scan is entirely branch-free: every row of the box is one masked
+        // load, a popcount and two ORs. Rather than widening six bounds as it
+        // goes, it collects which c0/c1/c2 coordinates are occupied as bitmaps
+        // and reads the bounds off them once at the end.
+        let mut colorcount: i64 = 0;
+        let mut c0_used: u32 = 0;
+        let mut c1_used: u64 = 0;
+        let mut c2_used: u32 = 0;
 
         for c0 in original.c0min..=original.c0max {
+            let mut plane: u32 = 0;
+
             for c1 in original.c1min..=original.c1max {
-                let row_start =
-                    Self::histogram_index(c0 as usize, c1 as usize, original.c2min as usize);
-                let row = &self.histogram[row_start..row_start + c2_len];
-
-                // Counting the occupied cells is the whole hot loop of the
-                // palette build, so it stays a plain reduction the compiler can
-                // vectorize. Widening the six bounds cell by cell instead chains
-                // as many dependent min/max on every occupied cell, which is
-                // what made this scan slower than the passes it replaced.
-                let occupied = row.iter().filter(|&&count| count != 0).count();
-                if occupied == 0 {
-                    continue;
-                }
-                colorcount += occupied as i64;
-
-                // A row contributes the same c0/c1 whatever its occupancy, so
-                // those bounds only have to be widened once per non-empty row.
-                occupied_c0min = occupied_c0min.min(c0);
-                occupied_c0max = occupied_c0max.max(c0);
-                occupied_c1min = occupied_c1min.min(c1);
-                occupied_c1max = occupied_c1max.max(c1);
-
-                // Only the first and last occupied cell of the row can move the
-                // c2 bounds, and neither is worth looking for once the bound
-                // already reaches the edge of the box.
-                if occupied_c2min > original.c2min {
-                    if let Some(first) = row.iter().position(|&count| count != 0) {
-                        occupied_c2min = occupied_c2min.min(original.c2min + first as i32);
-                    }
-                }
-                if occupied_c2max < original.c2max {
-                    if let Some(last) = row.iter().rposition(|&count| count != 0) {
-                        occupied_c2max = occupied_c2max.max(original.c2min + last as i32);
-                    }
-                }
+                let row = occupancy.row(c0, c1) & mask;
+                colorcount += row.count_ones() as i64;
+                plane |= row;
+                c1_used |= ((row != 0) as u64) << c1;
             }
+
+            c2_used |= plane;
+            c0_used |= ((plane != 0) as u32) << c0;
         }
 
         if colorcount != 0 {
-            boxp.c0min = occupied_c0min;
-            boxp.c0max = occupied_c0max;
-            boxp.c1min = occupied_c1min;
-            boxp.c1max = occupied_c1max;
-            boxp.c2min = occupied_c2min;
-            boxp.c2max = occupied_c2max;
+            boxp.c0min = c0_used.trailing_zeros() as i32;
+            boxp.c0max = (u32::BITS - 1 - c0_used.leading_zeros()) as i32;
+            boxp.c1min = c1_used.trailing_zeros() as i32;
+            boxp.c1max = (u64::BITS - 1 - c1_used.leading_zeros()) as i32;
+            boxp.c2min = c2_used.trailing_zeros() as i32;
+            boxp.c2max = (u32::BITS - 1 - c2_used.leading_zeros()) as i32;
         }
 
         let dist0 = ((boxp.c0max - boxp.c0min) << C0_SHIFT) as i64 * C0_SCALE as i64;
@@ -266,6 +283,7 @@ impl Quantizer {
 
     fn median_cut(
         &self,
+        occupancy: &Occupancy,
         boxlist: &mut [ColorBox],
         mut numboxes: usize,
         desired_colors: usize,
@@ -320,32 +338,38 @@ impl Quantizer {
                 _ => unreachable!(),
             }
 
-            self.update_box(&mut boxlist[b1_idx]);
-            self.update_box(&mut boxlist[b2_idx]);
+            self.update_box(occupancy, &mut boxlist[b1_idx]);
+            self.update_box(occupancy, &mut boxlist[b2_idx]);
             numboxes += 1;
         }
 
         numboxes
     }
 
-    fn compute_color(&self, boxp: &ColorBox) -> (u8, u8, u8) {
+    fn compute_color(&self, occupancy: &Occupancy, boxp: &ColorBox) -> (u8, u8, u8) {
         let mut total: i64 = 0;
         let mut c0total: i64 = 0;
         let mut c1total: i64 = 0;
         let mut c2total: i64 = 0;
 
+        let mask = Occupancy::c2_mask(boxp.c2min, boxp.c2max);
+
         for c0 in boxp.c0min..=boxp.c0max {
             for c1 in boxp.c1min..=boxp.c1max {
-                for c2 in boxp.c2min..=boxp.c2max {
+                // Walking the set bits visits only the occupied cells, so the
+                // empty ones never reach the histogram at all.
+                let mut row = occupancy.row(c0, c1) & mask;
+                while row != 0 {
+                    let c2 = row.trailing_zeros() as i32;
+                    row &= row - 1;
+
                     let count = self.histogram
                         [Self::histogram_index(c0 as usize, c1 as usize, c2 as usize)]
                         as i64;
-                    if count != 0 {
-                        total += count;
-                        c0total += ((c0 << C0_SHIFT) + (1 << (C0_SHIFT - 1))) as i64 * count;
-                        c1total += ((c1 << C1_SHIFT) + (1 << (C1_SHIFT - 1))) as i64 * count;
-                        c2total += ((c2 << C2_SHIFT) + (1 << (C2_SHIFT - 1))) as i64 * count;
-                    }
+                    total += count;
+                    c0total += ((c0 << C0_SHIFT) + (1 << (C0_SHIFT - 1))) as i64 * count;
+                    c1total += ((c1 << C1_SHIFT) + (1 << (C1_SHIFT - 1))) as i64 * count;
+                    c2total += ((c2 << C2_SHIFT) + (1 << (C2_SHIFT - 1))) as i64 * count;
                 }
             }
         }
@@ -376,11 +400,13 @@ impl Quantizer {
             colorcount: 0,
         };
 
-        self.update_box(&mut boxlist[0]);
-        let numboxes = self.median_cut(&mut boxlist, 1, desired_colors);
+        let occupancy = Occupancy::from_histogram(&self.histogram);
+
+        self.update_box(&occupancy, &mut boxlist[0]);
+        let numboxes = self.median_cut(&occupancy, &mut boxlist, 1, desired_colors);
 
         for i in 0..numboxes {
-            let (r, g, b) = self.compute_color(&boxlist[i]);
+            let (r, g, b) = self.compute_color(&occupancy, &boxlist[i]);
             self.palette.set(i, r, g, b);
         }
         self.palette.colors_total = numboxes;
