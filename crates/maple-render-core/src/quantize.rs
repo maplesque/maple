@@ -651,15 +651,13 @@ impl Quantizer {
         let height = img.height() as usize;
         let mut output = vec![0u8; width * height];
 
-        for (y, row) in img.rows().enumerate() {
-            for (x, pixel) in row.enumerate() {
-                let r = pixel[0] as usize;
-                let g = pixel[1] as usize;
-                let b = pixel[2] as usize;
+        let (pixels, _) = img.as_raw().as_chunks::<4>();
 
-                let c0 = r >> C0_SHIFT;
-                let c1 = g >> C1_SHIFT;
-                let c2 = b >> C2_SHIFT;
+        for (out_row, src_row) in output.chunks_exact_mut(width).zip(pixels.chunks_exact(width)) {
+            for (out, pixel) in out_row.iter_mut().zip(src_row) {
+                let c0 = (pixel[0] as usize) >> C0_SHIFT;
+                let c1 = (pixel[1] as usize) >> C1_SHIFT;
+                let c2 = (pixel[2] as usize) >> C2_SHIFT;
 
                 let histogram_index = Self::histogram_index(c0, c1, c2);
                 let mut cached = self.histogram[histogram_index];
@@ -668,7 +666,7 @@ impl Quantizer {
                     cached = self.histogram[histogram_index];
                 }
 
-                output[y * width + x] = (cached - 1) as u8;
+                *out = (cached - 1) as u8;
             }
         }
 
@@ -680,12 +678,25 @@ impl Quantizer {
         let height = img.height() as usize;
         let mut output = vec![0u8; width * height];
 
-        self.fserrors = vec![0i16; (width + 2) * 3];
+        // Taking the error buffer out of `self` for the length of the scan
+        // lets the column loop work on a plain `&mut [i16]` while still being
+        // able to call `fill_inverse_cmap` on `self` when the colormap misses.
+        // It also reuses the previous frame's allocation.
+        let mut fserrors = std::mem::take(&mut self.fserrors);
+        fserrors.clear();
+        fserrors.resize((width + 2) * 3, 0);
         self.on_odd_row = false;
 
         let table_offset = MAXJSAMPLE as usize;
+        let (pixels, _) = img.as_raw().as_chunks::<4>();
 
         for row in 0..height {
+            // One bounds check per row instead of a bounds-checked
+            // `get_pixel` and a bounds-checked `output[row * width + x]` per
+            // pixel.
+            let src_row = &pixels[row * width..row * width + width];
+            let out_row = &mut output[row * width..row * width + width];
+
             let (dir, start_col, end_col, errorptr_start) = if self.on_odd_row {
                 (-1i32, width as i32 - 1, -1i32, (width + 1) * 3)
             } else {
@@ -708,13 +719,14 @@ impl Quantizer {
 
             while col != end_col {
                 let x = col as usize;
-                let pixel = img.get_pixel(x as u32, row as u32);
+                let pixel = &src_row[x];
 
                 // Add error from previous and below
                 let ep_idx = (errorptr + dir3) as usize;
-                cur0 = (cur0 + self.fserrors[ep_idx] as i32 + 8) >> 4;
-                cur1 = (cur1 + self.fserrors[ep_idx + 1] as i32 + 8) >> 4;
-                cur2 = (cur2 + self.fserrors[ep_idx + 2] as i32 + 8) >> 4;
+                let below = &fserrors[ep_idx..ep_idx + 3];
+                cur0 = (cur0 + below[0] as i32 + 8) >> 4;
+                cur1 = (cur1 + below[1] as i32 + 8) >> 4;
+                cur2 = (cur2 + below[2] as i32 + 8) >> 4;
 
                 cur0 = self.error_limiter[table_offset.wrapping_add(cur0 as usize)];
                 cur1 = self.error_limiter[table_offset.wrapping_add(cur1 as usize)];
@@ -739,16 +751,18 @@ impl Quantizer {
                 }
 
                 let pixcode = (cached - 1) as usize;
-                output[row * width + x] = pixcode as u8;
+                out_row[x] = pixcode as u8;
 
                 cur0 -= self.palette.red[pixcode] as i32;
                 cur1 -= self.palette.green[pixcode] as i32;
                 cur2 -= self.palette.blue[pixcode] as i32;
 
+                let here = &mut fserrors[errorptr as usize..errorptr as usize + 3];
+
                 let mut bnexterr = cur0;
                 let mut delta = cur0 * 2;
                 cur0 += delta; // 3x
-                self.fserrors[errorptr as usize] = (bpreverr0 + cur0) as i16;
+                here[0] = (bpreverr0 + cur0) as i16;
                 cur0 += delta; // 5x
                 bpreverr0 = belowerr0 + cur0;
                 belowerr0 = bnexterr;
@@ -757,7 +771,7 @@ impl Quantizer {
                 bnexterr = cur1;
                 delta = cur1 * 2;
                 cur1 += delta;
-                self.fserrors[errorptr as usize + 1] = (bpreverr1 + cur1) as i16;
+                here[1] = (bpreverr1 + cur1) as i16;
                 cur1 += delta;
                 bpreverr1 = belowerr1 + cur1;
                 belowerr1 = bnexterr;
@@ -766,7 +780,7 @@ impl Quantizer {
                 bnexterr = cur2;
                 delta = cur2 * 2;
                 cur2 += delta;
-                self.fserrors[errorptr as usize + 2] = (bpreverr2 + cur2) as i16;
+                here[2] = (bpreverr2 + cur2) as i16;
                 cur2 += delta;
                 bpreverr2 = belowerr2 + cur2;
                 belowerr2 = bnexterr;
@@ -776,11 +790,14 @@ impl Quantizer {
                 errorptr += dir3;
             }
 
-            self.fserrors[errorptr as usize + 1] = bpreverr1 as i16;
-            self.fserrors[errorptr as usize + 2] = bpreverr2 as i16;
+            let tail = &mut fserrors[errorptr as usize..errorptr as usize + 3];
+            tail[1] = bpreverr1 as i16;
+            tail[2] = bpreverr2 as i16;
 
             self.on_odd_row = !self.on_odd_row;
         }
+
+        self.fserrors = fserrors;
 
         output
     }
