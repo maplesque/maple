@@ -549,28 +549,34 @@ impl Quantizer {
         colorlist: &[u8; MAXNUMCOLORS],
         bestcolor: &mut [u8; BOX_ELEMS],
     ) {
-        // Same i32 range argument as `find_nearby_colors`. Keeping the winning
-        // color as an i32 next to the distance lets the compare-and-select run
-        // on two same-width lanes instead of mixing an i64 compare with a byte
-        // store; it is narrowed back to u8 once, at the end.
-        let mut bestdist = [i32::MAX; BOX_ELEMS];
-        let mut bestindex = [0i32; BOX_ELEMS];
+        // The distances here stay in i64 on purpose, even though they would fit
+        // in an i32. Every cell is a compare against the running best that
+        // almost never wins after the first candidate color, so the branchy
+        // scalar loop below is the shape we want. With i32 distances - and in
+        // particular with the winning color staged in a second i32 array next
+        // to it - LLVM instead turns the whole 128-cell update into an
+        // unconditional vector compare-and-select. That trades a
+        // near-perfectly-predicted branch for a load/select/store on every
+        // cell, which is a large loss on the aarch64 macro runners the
+        // benchmarks are measured on (`find_best_colors` 842 us -> 1.3 ms),
+        // however it may look on an x86 dev box. Keep this loop scalar.
+        let mut bestdist = [i64::MAX; BOX_ELEMS];
 
-        const STEP_C0: i32 = ((1 << C0_SHIFT) * C0_SCALE) as i32;
-        const STEP_C1: i32 = ((1 << C1_SHIFT) * C1_SCALE) as i32;
-        const STEP_C2: i32 = ((1 << C2_SHIFT) * C2_SCALE) as i32;
+        const STEP_C0: i64 = ((1 << C0_SHIFT) * C0_SCALE) as i64;
+        const STEP_C1: i64 = ((1 << C1_SHIFT) * C1_SCALE) as i64;
+        const STEP_C2: i64 = ((1 << C2_SHIFT) * C2_SCALE) as i64;
 
         for i in 0..numcolors {
-            let icolor = colorlist[i] as i32;
+            let icolor = colorlist[i];
             let r = self.palette.red[icolor as usize] as i32;
             let g = self.palette.green[icolor as usize] as i32;
             let b = self.palette.blue[icolor as usize] as i32;
 
-            let mut inc0 = (minc0 - r) * C0_SCALE;
+            let mut inc0 = (minc0 - r) as i64 * C0_SCALE as i64;
             let mut dist0 = inc0 * inc0;
-            let mut inc1 = (minc1 - g) * C1_SCALE;
+            let mut inc1 = (minc1 - g) as i64 * C1_SCALE as i64;
             dist0 += inc1 * inc1;
-            let mut inc2 = (minc2 - b) * C2_SCALE;
+            let mut inc2 = (minc2 - b) as i64 * C2_SCALE as i64;
             dist0 += inc2 * inc2;
 
             inc0 = inc0 * (2 * STEP_C0) + STEP_C0 * STEP_C0;
@@ -589,10 +595,9 @@ impl Quantizer {
                     let mut xx2 = inc2;
 
                     for _ic2 in 0..BOX_C2_ELEMS {
-                        let closer = dist2 < bestdist[bptr_idx];
-                        if closer {
+                        if dist2 < bestdist[bptr_idx] {
                             bestdist[bptr_idx] = dist2;
-                            bestindex[bptr_idx] = icolor;
+                            bestcolor[bptr_idx] = icolor;
                         }
                         dist2 += xx2;
                         xx2 += 2 * STEP_C2 * STEP_C2;
@@ -604,10 +609,6 @@ impl Quantizer {
                 dist0 += xx0;
                 xx0 += 2 * STEP_C0 * STEP_C0;
             }
-        }
-
-        for (out, &best) in bestcolor.iter_mut().zip(bestindex.iter()) {
-            *out = best as u8;
         }
     }
 
