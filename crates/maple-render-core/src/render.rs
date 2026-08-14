@@ -8,7 +8,7 @@ use crate::{
     error::{Error, Result},
     input::{Input, Inputs},
     mapping::Mapping,
-    pixer::{Pixer, sample_linear},
+    pixer::{Pixer, sample_linear_opaque, sample_linear_premultiplied},
 };
 
 static RENDER_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -90,6 +90,7 @@ impl Render {
         let out_w = self.out.width() as usize;
         let _out_h = self.out.height() as usize;
         let input_img = input.get();
+        let input_opaque = input.is_opaque();
 
         let light_raw = mapping.light.as_raw();
         let dark_raw = mapping.dark.as_raw();
@@ -202,44 +203,71 @@ impl Render {
                 let xxb = input.in_x0 + active_scale * (xxb_rot + RR + input.xo) / RR - xx;
                 let yyb = input.in_y0 + active_scale * (yyb_rot + RR + input.yo) / RR - yy;
 
-                let mut mo = sample_linear(input_img, xx, yy);
-                let m2 = sample_linear(input_img, xx + xxa / 2.0, yy + yya / 2.0);
-                let m3 = sample_linear(input_img, xx - xxa / 2.0, yy - yya / 2.0);
-                let m4 = sample_linear(input_img, xx + xxb / 2.0, yy + yyb / 2.0);
-                let m5 = sample_linear(input_img, xx - xxb / 2.0, yy - yyb / 2.0);
-                let m2b = sample_linear(input_img, xx + (xxa + xxb) / 2.0, yy + (yya + yyb) / 2.0);
-                let m3b = sample_linear(input_img, xx + (xxa - xxb) / 2.0, yy + (yya - yyb) / 2.0);
-                let m4b = sample_linear(input_img, xx - (xxa + xxb) / 2.0, yy - (yya + yyb) / 2.0);
-                let m5b = sample_linear(input_img, xx - (xxa - xxb) / 2.0, yy - (yya - yyb) / 2.0);
-
-                let mut mo_p = mo;
-                mo_p.preblend();
-                let mut m2_p = m2;
-                m2_p.preblend();
-                let mut m3_p = m3;
-                m3_p.preblend();
-                let mut m4_p = m4;
-                m4_p.preblend();
-                let mut m5_p = m5;
-                m5_p.preblend();
-                let mut m2b_p = m2b;
-                m2b_p.preblend();
-                let mut m3b_p = m3b;
-                m3b_p.preblend();
-                let mut m4b_p = m4b;
-                m4b_p.preblend();
-                let mut m5b_p = m5b;
-                m5b_p.preblend();
+                let (mo, m2, m3, m4, m5, m2b, m3b, m4b, m5b) = if input_opaque {
+                    (
+                        sample_linear_opaque(input_img, xx, yy),
+                        sample_linear_opaque(input_img, xx + xxa / 2.0, yy + yya / 2.0),
+                        sample_linear_opaque(input_img, xx - xxa / 2.0, yy - yya / 2.0),
+                        sample_linear_opaque(input_img, xx + xxb / 2.0, yy + yyb / 2.0),
+                        sample_linear_opaque(input_img, xx - xxb / 2.0, yy - yyb / 2.0),
+                        sample_linear_opaque(
+                            input_img,
+                            xx + (xxa + xxb) / 2.0,
+                            yy + (yya + yyb) / 2.0,
+                        ),
+                        sample_linear_opaque(
+                            input_img,
+                            xx + (xxa - xxb) / 2.0,
+                            yy + (yya - yyb) / 2.0,
+                        ),
+                        sample_linear_opaque(
+                            input_img,
+                            xx - (xxa + xxb) / 2.0,
+                            yy - (yya + yyb) / 2.0,
+                        ),
+                        sample_linear_opaque(
+                            input_img,
+                            xx - (xxa - xxb) / 2.0,
+                            yy - (yya - yyb) / 2.0,
+                        ),
+                    )
+                } else {
+                    (
+                        sample_linear_premultiplied(input_img, xx, yy),
+                        sample_linear_premultiplied(input_img, xx + xxa / 2.0, yy + yya / 2.0),
+                        sample_linear_premultiplied(input_img, xx - xxa / 2.0, yy - yya / 2.0),
+                        sample_linear_premultiplied(input_img, xx + xxb / 2.0, yy + yyb / 2.0),
+                        sample_linear_premultiplied(input_img, xx - xxb / 2.0, yy - yyb / 2.0),
+                        sample_linear_premultiplied(
+                            input_img,
+                            xx + (xxa + xxb) / 2.0,
+                            yy + (yya + yyb) / 2.0,
+                        ),
+                        sample_linear_premultiplied(
+                            input_img,
+                            xx + (xxa - xxb) / 2.0,
+                            yy + (yya - yyb) / 2.0,
+                        ),
+                        sample_linear_premultiplied(
+                            input_img,
+                            xx - (xxa + xxb) / 2.0,
+                            yy - (yya + yyb) / 2.0,
+                        ),
+                        sample_linear_premultiplied(
+                            input_img,
+                            xx - (xxa - xxb) / 2.0,
+                            yy - (yya - yyb) / 2.0,
+                        ),
+                    )
+                };
 
                 let sc = (mo.a * 4.0
                     + (m2.a + m3.a + m4.a + m5.a) * 2.0
                     + (m2b.a + m3b.a + m4b.a + m5b.a))
                     / 16.0;
 
-                mo = (mo_p * 4.0
-                    + (m2_p + m3_p + m4_p + m5_p) * 2.0
-                    + (m2b_p + m3b_p + m4b_p + m5b_p))
-                    / 16.0;
+                let mut mo =
+                    (mo * 4.0 + (m2 + m3 + m4 + m5) * 2.0 + (m2b + m3b + m4b + m5b)) / 16.0;
 
                 if sc > 0.0001 {
                     mo.postblend(sc);

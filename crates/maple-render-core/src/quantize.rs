@@ -8,6 +8,7 @@ const HIST_C2_BITS: usize = 5; // B
 const HIST_C0_ELEMS: usize = 1 << HIST_C0_BITS;
 const HIST_C1_ELEMS: usize = 1 << HIST_C1_BITS;
 const HIST_C2_ELEMS: usize = 1 << HIST_C2_BITS;
+const HIST_ELEMS: usize = HIST_C0_ELEMS * HIST_C1_ELEMS * HIST_C2_ELEMS;
 
 const C0_SHIFT: usize = 8 - HIST_C0_BITS;
 const C1_SHIFT: usize = 8 - HIST_C1_BITS;
@@ -26,6 +27,9 @@ const BOX_C2_LOG: usize = HIST_C2_BITS - 3;
 const BOX_C0_ELEMS: usize = 1 << BOX_C0_LOG;
 const BOX_C1_ELEMS: usize = 1 << BOX_C1_LOG;
 const BOX_C2_ELEMS: usize = 1 << BOX_C2_LOG;
+
+/// Number of histogram cells one `fill_inverse_cmap` call resolves.
+const BOX_ELEMS: usize = BOX_C0_ELEMS * BOX_C1_ELEMS * BOX_C2_ELEMS;
 
 const BOX_C0_SHIFT: usize = C0_SHIFT + BOX_C0_LOG;
 const BOX_C1_SHIFT: usize = C1_SHIFT + BOX_C1_LOG;
@@ -72,6 +76,48 @@ impl Palette {
     }
 }
 
+/// Bitmap of the occupied histogram cells, one `u32` per `(c0, c1)` row.
+///
+/// `HIST_C2_ELEMS` is exactly 32, so a whole row of the histogram fits in a
+/// single word and the 128 KB histogram condenses to 8 KB that stays in L1 for
+/// the entire median cut. The histogram is immutable while boxes are being
+/// split, so the bitmap is built once and stays valid for every split.
+struct Occupancy {
+    rows: Box<[u32; HIST_C0_ELEMS * HIST_C1_ELEMS]>,
+}
+
+const _: () = assert!(HIST_C2_ELEMS == u32::BITS as usize);
+const _: () = assert!(HIST_C0_ELEMS <= u32::BITS as usize);
+const _: () = assert!(HIST_C1_ELEMS <= u64::BITS as usize);
+
+impl Occupancy {
+    fn from_histogram(histogram: &[u16; HIST_ELEMS]) -> Self {
+        let mut rows = Box::new([0u32; HIST_C0_ELEMS * HIST_C1_ELEMS]);
+
+        for (bits, cells) in rows.iter_mut().zip(histogram.chunks_exact(HIST_C2_ELEMS)) {
+            let mut row = 0u32;
+            for (c2, &count) in cells.iter().enumerate() {
+                row |= ((count != 0) as u32) << c2;
+            }
+            *bits = row;
+        }
+
+        Occupancy { rows }
+    }
+
+    #[inline(always)]
+    fn row(&self, c0: i32, c1: i32) -> u32 {
+        self.rows[c0 as usize * HIST_C1_ELEMS + c1 as usize]
+    }
+
+    /// Mask of the `c2` bits a box spans.
+    #[inline(always)]
+    fn c2_mask(c2min: i32, c2max: i32) -> u32 {
+        let width = (c2max - c2min + 1) as u32;
+        if width >= u32::BITS { u32::MAX } else { ((1u32 << width) - 1) << c2min }
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 struct ColorBox {
     c0min: i32,
@@ -85,7 +131,7 @@ struct ColorBox {
 }
 
 pub struct Quantizer {
-    histogram: Box<[[[u16; HIST_C2_ELEMS]; HIST_C1_ELEMS]; HIST_C0_ELEMS]>,
+    histogram: Box<[u16; HIST_ELEMS]>,
     fserrors: Vec<i16>,
     error_limiter: Vec<i32>,
     on_odd_row: bool,
@@ -95,7 +141,7 @@ pub struct Quantizer {
 impl Quantizer {
     pub fn new(reference: &RgbaImage) -> Self {
         let mut q = Quantizer {
-            histogram: Box::new([[[0u16; HIST_C2_ELEMS]; HIST_C1_ELEMS]; HIST_C0_ELEMS]),
+            histogram: Box::new([0; HIST_ELEMS]),
             fserrors: Vec::new(),
             error_limiter: Vec::new(),
             on_odd_row: false,
@@ -146,25 +192,63 @@ impl Quantizer {
     }
 
     fn zero_histogram(&mut self) {
-        for c0 in 0..HIST_C0_ELEMS {
-            for c1 in 0..HIST_C1_ELEMS {
-                for c2 in 0..HIST_C2_ELEMS {
-                    self.histogram[c0][c1][c2] = 0;
-                }
-            }
-        }
+        self.histogram.fill(0);
+    }
+
+    #[inline(always)]
+    const fn histogram_index(c0: usize, c1: usize, c2: usize) -> usize {
+        (c0 * HIST_C1_ELEMS + c1) * HIST_C2_ELEMS + c2
+    }
+
+    #[inline(always)]
+    fn histogram_index_of(pixel: &[u8; 4]) -> usize {
+        Self::histogram_index(
+            (pixel[0] as usize) >> C0_SHIFT,
+            (pixel[1] as usize) >> C1_SHIFT,
+            (pixel[2] as usize) >> C2_SHIFT,
+        )
     }
 
     fn prescan_quantize(&mut self, img: &RgbaImage) {
-        for pixel in img.pixels() {
-            let r = (pixel[0] as usize) >> C0_SHIFT;
-            let g = (pixel[1] as usize) >> C1_SHIFT;
-            let b = (pixel[2] as usize) >> C2_SHIFT;
+        // The arithmetic per pixel is trivial; what costs is the scatter into
+        // the histogram. Neighbouring pixels of a photo usually land in the
+        // same cell, so a single table turns the scan into one long chain of
+        // store-to-load forwarded increments. Scattering even and odd pixels
+        // into two tables halves that chain; the tables are folded back
+        // together afterwards in one linear pass.
+        //
+        // Two lanes is the sweet spot: four makes the working set larger than
+        // the level of cache that keeps up, and loses more than the shorter
+        // chain wins.
+        let (pairs, tail) = img.as_raw().as_chunks::<8>();
+        let mut odd_counts = vec![0u16; HIST_ELEMS];
 
-            let cell = &mut self.histogram[r][g][b];
+        for pair in pairs {
+            let (pixels, _) = pair.as_chunks::<4>();
+            let even = Self::histogram_index_of(&pixels[0]);
+            let odd = Self::histogram_index_of(&pixels[1]);
+
+            let cell = &mut self.histogram[even];
             if *cell < u16::MAX {
                 *cell += 1;
             }
+
+            let cell = &mut odd_counts[odd];
+            if *cell < u16::MAX {
+                *cell += 1;
+            }
+        }
+
+        for pixel in tail.as_chunks::<4>().0 {
+            let cell = &mut self.histogram[Self::histogram_index_of(pixel)];
+            if *cell < u16::MAX {
+                *cell += 1;
+            }
+        }
+
+        // Folding the two halves back together is a linear, vectorizable pass.
+        for (cell, odd) in self.histogram.iter_mut().zip(odd_counts.iter()) {
+            *cell = cell.saturating_add(*odd);
         }
     }
 
@@ -196,118 +280,52 @@ impl Quantizer {
         which
     }
 
-    fn update_box(&self, boxp: &mut ColorBox) {
-        let mut c0min = boxp.c0min;
-        let mut c0max = boxp.c0max;
-        let mut c1min = boxp.c1min;
-        let mut c1max = boxp.c1max;
-        let mut c2min = boxp.c2min;
-        let mut c2max = boxp.c2max;
+    fn update_box(&self, occupancy: &Occupancy, boxp: &mut ColorBox) {
+        let original = *boxp;
+        let mask = Occupancy::c2_mask(original.c2min, original.c2max);
 
-        if c0max > c0min {
-            'outer: for c0 in c0min..=c0max {
-                for c1 in c1min..=c1max {
-                    for c2 in c2min..=c2max {
-                        if self.histogram[c0 as usize][c1 as usize][c2 as usize] != 0 {
-                            boxp.c0min = c0;
-                            c0min = c0;
-                            break 'outer;
-                        }
-                    }
-                }
+        // The scan is entirely branch-free: every row of the box is one masked
+        // load, a popcount and two ORs. Rather than widening six bounds as it
+        // goes, it collects which c0/c1/c2 coordinates are occupied as bitmaps
+        // and reads the bounds off them once at the end.
+        let mut colorcount: i64 = 0;
+        let mut c0_used: u32 = 0;
+        let mut c1_used: u64 = 0;
+        let mut c2_used: u32 = 0;
+
+        for c0 in original.c0min..=original.c0max {
+            let mut plane: u32 = 0;
+
+            for c1 in original.c1min..=original.c1max {
+                let row = occupancy.row(c0, c1) & mask;
+                colorcount += row.count_ones() as i64;
+                plane |= row;
+                c1_used |= ((row != 0) as u64) << c1;
             }
+
+            c2_used |= plane;
+            c0_used |= ((plane != 0) as u32) << c0;
         }
 
-        if c0max > c0min {
-            'outer: for c0 in (c0min..=c0max).rev() {
-                for c1 in c1min..=c1max {
-                    for c2 in c2min..=c2max {
-                        if self.histogram[c0 as usize][c1 as usize][c2 as usize] != 0 {
-                            boxp.c0max = c0;
-                            c0max = c0;
-                            break 'outer;
-                        }
-                    }
-                }
-            }
+        if colorcount != 0 {
+            boxp.c0min = c0_used.trailing_zeros() as i32;
+            boxp.c0max = (u32::BITS - 1 - c0_used.leading_zeros()) as i32;
+            boxp.c1min = c1_used.trailing_zeros() as i32;
+            boxp.c1max = (u64::BITS - 1 - c1_used.leading_zeros()) as i32;
+            boxp.c2min = c2_used.trailing_zeros() as i32;
+            boxp.c2max = (u32::BITS - 1 - c2_used.leading_zeros()) as i32;
         }
 
-        if c1max > c1min {
-            'outer: for c1 in c1min..=c1max {
-                for c0 in c0min..=c0max {
-                    for c2 in c2min..=c2max {
-                        if self.histogram[c0 as usize][c1 as usize][c2 as usize] != 0 {
-                            boxp.c1min = c1;
-                            c1min = c1;
-                            break 'outer;
-                        }
-                    }
-                }
-            }
-        }
-
-        if c1max > c1min {
-            'outer: for c1 in (c1min..=c1max).rev() {
-                for c0 in c0min..=c0max {
-                    for c2 in c2min..=c2max {
-                        if self.histogram[c0 as usize][c1 as usize][c2 as usize] != 0 {
-                            boxp.c1max = c1;
-                            c1max = c1;
-                            break 'outer;
-                        }
-                    }
-                }
-            }
-        }
-
-        if c2max > c2min {
-            'outer: for c2 in c2min..=c2max {
-                for c0 in c0min..=c0max {
-                    for c1 in c1min..=c1max {
-                        if self.histogram[c0 as usize][c1 as usize][c2 as usize] != 0 {
-                            boxp.c2min = c2;
-                            c2min = c2;
-                            break 'outer;
-                        }
-                    }
-                }
-            }
-        }
-
-        if c2max > c2min {
-            'outer: for c2 in (c2min..=c2max).rev() {
-                for c0 in c0min..=c0max {
-                    for c1 in c1min..=c1max {
-                        if self.histogram[c0 as usize][c1 as usize][c2 as usize] != 0 {
-                            boxp.c2max = c2;
-                            c2max = c2;
-                            break 'outer;
-                        }
-                    }
-                }
-            }
-        }
-
-        let dist0 = ((c0max - c0min) << C0_SHIFT) as i64 * C0_SCALE as i64;
-        let dist1 = ((c1max - c1min) << C1_SHIFT) as i64 * C1_SCALE as i64;
-        let dist2 = ((c2max - c2min) << C2_SHIFT) as i64 * C2_SCALE as i64;
+        let dist0 = ((boxp.c0max - boxp.c0min) << C0_SHIFT) as i64 * C0_SCALE as i64;
+        let dist1 = ((boxp.c1max - boxp.c1min) << C1_SHIFT) as i64 * C1_SCALE as i64;
+        let dist2 = ((boxp.c2max - boxp.c2min) << C2_SHIFT) as i64 * C2_SCALE as i64;
         boxp.volume = dist0 * dist0 + dist1 * dist1 + dist2 * dist2;
-
-        let mut ccount: i64 = 0;
-        for c0 in c0min..=c0max {
-            for c1 in c1min..=c1max {
-                for c2 in c2min..=c2max {
-                    if self.histogram[c0 as usize][c1 as usize][c2 as usize] != 0 {
-                        ccount += 1;
-                    }
-                }
-            }
-        }
-        boxp.colorcount = ccount;
+        boxp.colorcount = colorcount;
     }
 
     fn median_cut(
         &self,
+        occupancy: &Occupancy,
         boxlist: &mut [ColorBox],
         mut numboxes: usize,
         desired_colors: usize,
@@ -362,30 +380,38 @@ impl Quantizer {
                 _ => unreachable!(),
             }
 
-            self.update_box(&mut boxlist[b1_idx]);
-            self.update_box(&mut boxlist[b2_idx]);
+            self.update_box(occupancy, &mut boxlist[b1_idx]);
+            self.update_box(occupancy, &mut boxlist[b2_idx]);
             numboxes += 1;
         }
 
         numboxes
     }
 
-    fn compute_color(&self, boxp: &ColorBox) -> (u8, u8, u8) {
+    fn compute_color(&self, occupancy: &Occupancy, boxp: &ColorBox) -> (u8, u8, u8) {
         let mut total: i64 = 0;
         let mut c0total: i64 = 0;
         let mut c1total: i64 = 0;
         let mut c2total: i64 = 0;
 
+        let mask = Occupancy::c2_mask(boxp.c2min, boxp.c2max);
+
         for c0 in boxp.c0min..=boxp.c0max {
             for c1 in boxp.c1min..=boxp.c1max {
-                for c2 in boxp.c2min..=boxp.c2max {
-                    let count = self.histogram[c0 as usize][c1 as usize][c2 as usize] as i64;
-                    if count != 0 {
-                        total += count;
-                        c0total += ((c0 << C0_SHIFT) + (1 << (C0_SHIFT - 1))) as i64 * count;
-                        c1total += ((c1 << C1_SHIFT) + (1 << (C1_SHIFT - 1))) as i64 * count;
-                        c2total += ((c2 << C2_SHIFT) + (1 << (C2_SHIFT - 1))) as i64 * count;
-                    }
+                // Walking the set bits visits only the occupied cells, so the
+                // empty ones never reach the histogram at all.
+                let mut row = occupancy.row(c0, c1) & mask;
+                while row != 0 {
+                    let c2 = row.trailing_zeros() as i32;
+                    row &= row - 1;
+
+                    let count = self.histogram
+                        [Self::histogram_index(c0 as usize, c1 as usize, c2 as usize)]
+                        as i64;
+                    total += count;
+                    c0total += ((c0 << C0_SHIFT) + (1 << (C0_SHIFT - 1))) as i64 * count;
+                    c1total += ((c1 << C1_SHIFT) + (1 << (C1_SHIFT - 1))) as i64 * count;
+                    c2total += ((c2 << C2_SHIFT) + (1 << (C2_SHIFT - 1))) as i64 * count;
                 }
             }
         }
@@ -416,11 +442,13 @@ impl Quantizer {
             colorcount: 0,
         };
 
-        self.update_box(&mut boxlist[0]);
-        let numboxes = self.median_cut(&mut boxlist, 1, desired_colors);
+        let occupancy = Occupancy::from_histogram(&self.histogram);
+
+        self.update_box(&occupancy, &mut boxlist[0]);
+        let numboxes = self.median_cut(&occupancy, &mut boxlist, 1, desired_colors);
 
         for i in 0..numboxes {
-            let (r, g, b) = self.compute_color(&boxlist[i]);
+            let (r, g, b) = self.compute_color(&occupancy, &boxlist[i]);
             self.palette.set(i, r, g, b);
         }
         self.palette.colors_total = numboxes;
@@ -439,7 +467,7 @@ impl Quantizer {
         minc0: i32,
         minc1: i32,
         minc2: i32,
-        colorlist: &mut [u8],
+        colorlist: &mut [u8; MAXNUMCOLORS],
     ) -> usize {
         let numcolors = self.palette.colors_total;
 
@@ -450,8 +478,11 @@ impl Quantizer {
         let maxc2 = minc2 + ((1 << BOX_C2_SHIFT) - (1 << C2_SHIFT));
         let centerc2 = (minc2 + maxc2) >> 1;
 
-        let mut mindist = vec![0i64; MAXNUMCOLORS];
-        let mut minmaxdist: i64 = i64::MAX;
+        // A weighted squared distance never exceeds (255 * 3)^2 * 3, so the
+        // whole computation fits in an i32 - half the traffic of the i64 it
+        // used to run in, and a min-reduce the compiler can vectorize.
+        let mut mindist = [0i32; MAXNUMCOLORS];
+        let mut minmaxdist: i32 = i32::MAX;
 
         for i in 0..numcolors {
             let x0 = self.palette.red[i] as i32;
@@ -490,25 +521,21 @@ impl Quantizer {
         maxc: i32,
         centerc: i32,
         scale: i32,
-    ) -> (i64, i64) {
+    ) -> (i32, i32) {
         if x < minc {
-            let tdist = (x - minc) as i64 * scale as i64;
+            let tdist = (x - minc) * scale;
             let min_dist = tdist * tdist;
-            let tdist = (x - maxc) as i64 * scale as i64;
+            let tdist = (x - maxc) * scale;
             let max_dist = tdist * tdist;
             (min_dist, max_dist)
         } else if x > maxc {
-            let tdist = (x - maxc) as i64 * scale as i64;
+            let tdist = (x - maxc) * scale;
             let min_dist = tdist * tdist;
-            let tdist = (x - minc) as i64 * scale as i64;
+            let tdist = (x - minc) * scale;
             let max_dist = tdist * tdist;
             (min_dist, max_dist)
         } else {
-            let tdist = if x <= centerc {
-                (x - maxc) as i64 * scale as i64
-            } else {
-                (x - minc) as i64 * scale as i64
-            };
+            let tdist = if x <= centerc { (x - maxc) * scale } else { (x - minc) * scale };
             (0, tdist * tdist)
         }
     }
@@ -519,20 +546,31 @@ impl Quantizer {
         minc1: i32,
         minc2: i32,
         numcolors: usize,
-        colorlist: &[u8],
-        bestcolor: &mut [u8],
+        colorlist: &[u8; MAXNUMCOLORS],
+        bestcolor: &mut [u8; BOX_ELEMS],
     ) {
-        let mut bestdist = vec![i64::MAX; BOX_C0_ELEMS * BOX_C1_ELEMS * BOX_C2_ELEMS];
+        // The distances here stay in i64 on purpose, even though they would fit
+        // in an i32. Every cell is a compare against the running best that
+        // almost never wins after the first candidate color, so the branchy
+        // scalar loop below is the shape we want. With i32 distances - and in
+        // particular with the winning color staged in a second i32 array next
+        // to it - LLVM instead turns the whole 128-cell update into an
+        // unconditional vector compare-and-select. That trades a
+        // near-perfectly-predicted branch for a load/select/store on every
+        // cell, which is a large loss on the aarch64 macro runners the
+        // benchmarks are measured on (`find_best_colors` 842 us -> 1.3 ms),
+        // however it may look on an x86 dev box. Keep this loop scalar.
+        let mut bestdist = [i64::MAX; BOX_ELEMS];
 
         const STEP_C0: i64 = ((1 << C0_SHIFT) * C0_SCALE) as i64;
         const STEP_C1: i64 = ((1 << C1_SHIFT) * C1_SCALE) as i64;
         const STEP_C2: i64 = ((1 << C2_SHIFT) * C2_SCALE) as i64;
 
         for i in 0..numcolors {
-            let icolor = colorlist[i] as usize;
-            let r = self.palette.red[icolor] as i32;
-            let g = self.palette.green[icolor] as i32;
-            let b = self.palette.blue[icolor] as i32;
+            let icolor = colorlist[i];
+            let r = self.palette.red[icolor as usize] as i32;
+            let g = self.palette.green[icolor as usize] as i32;
+            let b = self.palette.blue[icolor as usize] as i32;
 
             let mut inc0 = (minc0 - r) as i64 * C0_SCALE as i64;
             let mut dist0 = inc0 * inc0;
@@ -559,7 +597,7 @@ impl Quantizer {
                     for _ic2 in 0..BOX_C2_ELEMS {
                         if dist2 < bestdist[bptr_idx] {
                             bestdist[bptr_idx] = dist2;
-                            bestcolor[bptr_idx] = icolor as u8;
+                            bestcolor[bptr_idx] = icolor;
                         }
                         dist2 += xx2;
                         xx2 += 2 * STEP_C2 * STEP_C2;
@@ -575,8 +613,11 @@ impl Quantizer {
     }
 
     fn fill_inverse_cmap(&mut self, c0: i32, c1: i32, c2: i32) {
-        let mut colorlist = vec![0u8; MAXNUMCOLORS];
-        let mut bestcolor = vec![0u8; BOX_C0_ELEMS * BOX_C1_ELEMS * BOX_C2_ELEMS];
+        // These are small, fixed-size and dead by the end of the call, so they
+        // live on the stack. Heap-allocating and zeroing them on every call
+        // was pure overhead on the cold-cache path.
+        let mut colorlist = [0u8; MAXNUMCOLORS];
+        let mut bestcolor = [0u8; BOX_ELEMS];
 
         let bc0 = c0 >> BOX_C0_LOG as i32;
         let bc1 = c1 >> BOX_C1_LOG as i32;
@@ -597,8 +638,9 @@ impl Quantizer {
         for ic0 in 0..BOX_C0_ELEMS {
             for ic1 in 0..BOX_C1_ELEMS {
                 for ic2 in 0..BOX_C2_ELEMS {
-                    self.histogram[base_c0 + ic0][base_c1 + ic1][base_c2 + ic2] =
-                        bestcolor[cptr_idx] as u16 + 1;
+                    let histogram_index =
+                        Self::histogram_index(base_c0 + ic0, base_c1 + ic1, base_c2 + ic2);
+                    self.histogram[histogram_index] = bestcolor[cptr_idx] as u16 + 1;
                     cptr_idx += 1;
                 }
             }
@@ -610,23 +652,22 @@ impl Quantizer {
         let height = img.height() as usize;
         let mut output = vec![0u8; width * height];
 
-        for (y, row) in img.rows().enumerate() {
-            for (x, pixel) in row.enumerate() {
-                let r = pixel[0] as usize;
-                let g = pixel[1] as usize;
-                let b = pixel[2] as usize;
+        let (pixels, _) = img.as_raw().as_chunks::<4>();
 
-                let c0 = r >> C0_SHIFT;
-                let c1 = g >> C1_SHIFT;
-                let c2 = b >> C2_SHIFT;
+        for (out_row, src_row) in output.chunks_exact_mut(width).zip(pixels.chunks_exact(width)) {
+            for (out, pixel) in out_row.iter_mut().zip(src_row) {
+                let c0 = (pixel[0] as usize) >> C0_SHIFT;
+                let c1 = (pixel[1] as usize) >> C1_SHIFT;
+                let c2 = (pixel[2] as usize) >> C2_SHIFT;
 
-                let mut cached = self.histogram[c0][c1][c2];
+                let histogram_index = Self::histogram_index(c0, c1, c2);
+                let mut cached = self.histogram[histogram_index];
                 if cached == 0 {
                     self.fill_inverse_cmap(c0 as i32, c1 as i32, c2 as i32);
-                    cached = self.histogram[c0][c1][c2];
+                    cached = self.histogram[histogram_index];
                 }
 
-                output[y * width + x] = (cached - 1) as u8;
+                *out = (cached - 1) as u8;
             }
         }
 
@@ -638,12 +679,25 @@ impl Quantizer {
         let height = img.height() as usize;
         let mut output = vec![0u8; width * height];
 
-        self.fserrors = vec![0i16; (width + 2) * 3];
+        // Taking the error buffer out of `self` for the length of the scan
+        // lets the column loop work on a plain `&mut [i16]` while still being
+        // able to call `fill_inverse_cmap` on `self` when the colormap misses.
+        // It also reuses the previous frame's allocation.
+        let mut fserrors = std::mem::take(&mut self.fserrors);
+        fserrors.clear();
+        fserrors.resize((width + 2) * 3, 0);
         self.on_odd_row = false;
 
         let table_offset = MAXJSAMPLE as usize;
+        let (pixels, _) = img.as_raw().as_chunks::<4>();
 
         for row in 0..height {
+            // One bounds check per row instead of a bounds-checked
+            // `get_pixel` and a bounds-checked `output[row * width + x]` per
+            // pixel.
+            let src_row = &pixels[row * width..row * width + width];
+            let out_row = &mut output[row * width..row * width + width];
+
             let (dir, start_col, end_col, errorptr_start) = if self.on_odd_row {
                 (-1i32, width as i32 - 1, -1i32, (width + 1) * 3)
             } else {
@@ -666,13 +720,14 @@ impl Quantizer {
 
             while col != end_col {
                 let x = col as usize;
-                let pixel = img.get_pixel(x as u32, row as u32);
+                let pixel = &src_row[x];
 
                 // Add error from previous and below
                 let ep_idx = (errorptr + dir3) as usize;
-                cur0 = (cur0 + self.fserrors[ep_idx] as i32 + 8) >> 4;
-                cur1 = (cur1 + self.fserrors[ep_idx + 1] as i32 + 8) >> 4;
-                cur2 = (cur2 + self.fserrors[ep_idx + 2] as i32 + 8) >> 4;
+                let below = &fserrors[ep_idx..ep_idx + 3];
+                cur0 = (cur0 + below[0] as i32 + 8) >> 4;
+                cur1 = (cur1 + below[1] as i32 + 8) >> 4;
+                cur2 = (cur2 + below[2] as i32 + 8) >> 4;
 
                 cur0 = self.error_limiter[table_offset.wrapping_add(cur0 as usize)];
                 cur1 = self.error_limiter[table_offset.wrapping_add(cur1 as usize)];
@@ -689,23 +744,26 @@ impl Quantizer {
                 let c1 = (cur1 as usize) >> C1_SHIFT;
                 let c2 = (cur2 as usize) >> C2_SHIFT;
 
-                let mut cached = self.histogram[c0][c1][c2];
+                let histogram_index = Self::histogram_index(c0, c1, c2);
+                let mut cached = self.histogram[histogram_index];
                 if cached == 0 {
                     self.fill_inverse_cmap(c0 as i32, c1 as i32, c2 as i32);
-                    cached = self.histogram[c0][c1][c2];
+                    cached = self.histogram[histogram_index];
                 }
 
                 let pixcode = (cached - 1) as usize;
-                output[row * width + x] = pixcode as u8;
+                out_row[x] = pixcode as u8;
 
                 cur0 -= self.palette.red[pixcode] as i32;
                 cur1 -= self.palette.green[pixcode] as i32;
                 cur2 -= self.palette.blue[pixcode] as i32;
 
+                let here = &mut fserrors[errorptr as usize..errorptr as usize + 3];
+
                 let mut bnexterr = cur0;
                 let mut delta = cur0 * 2;
                 cur0 += delta; // 3x
-                self.fserrors[errorptr as usize] = (bpreverr0 + cur0) as i16;
+                here[0] = (bpreverr0 + cur0) as i16;
                 cur0 += delta; // 5x
                 bpreverr0 = belowerr0 + cur0;
                 belowerr0 = bnexterr;
@@ -714,7 +772,7 @@ impl Quantizer {
                 bnexterr = cur1;
                 delta = cur1 * 2;
                 cur1 += delta;
-                self.fserrors[errorptr as usize + 1] = (bpreverr1 + cur1) as i16;
+                here[1] = (bpreverr1 + cur1) as i16;
                 cur1 += delta;
                 bpreverr1 = belowerr1 + cur1;
                 belowerr1 = bnexterr;
@@ -723,7 +781,7 @@ impl Quantizer {
                 bnexterr = cur2;
                 delta = cur2 * 2;
                 cur2 += delta;
-                self.fserrors[errorptr as usize + 2] = (bpreverr2 + cur2) as i16;
+                here[2] = (bpreverr2 + cur2) as i16;
                 cur2 += delta;
                 bpreverr2 = belowerr2 + cur2;
                 belowerr2 = bnexterr;
@@ -733,11 +791,14 @@ impl Quantizer {
                 errorptr += dir3;
             }
 
-            self.fserrors[errorptr as usize + 1] = bpreverr1 as i16;
-            self.fserrors[errorptr as usize + 2] = bpreverr2 as i16;
+            let tail = &mut fserrors[errorptr as usize..errorptr as usize + 3];
+            tail[1] = bpreverr1 as i16;
+            tail[2] = bpreverr2 as i16;
 
             self.on_odd_row = !self.on_odd_row;
         }
+
+        self.fserrors = fserrors;
 
         output
     }
