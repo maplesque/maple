@@ -28,6 +28,9 @@ const BOX_C0_ELEMS: usize = 1 << BOX_C0_LOG;
 const BOX_C1_ELEMS: usize = 1 << BOX_C1_LOG;
 const BOX_C2_ELEMS: usize = 1 << BOX_C2_LOG;
 
+/// Number of histogram cells one `fill_inverse_cmap` call resolves.
+const BOX_ELEMS: usize = BOX_C0_ELEMS * BOX_C1_ELEMS * BOX_C2_ELEMS;
+
 const BOX_C0_SHIFT: usize = C0_SHIFT + BOX_C0_LOG;
 const BOX_C1_SHIFT: usize = C1_SHIFT + BOX_C1_LOG;
 const BOX_C2_SHIFT: usize = C2_SHIFT + BOX_C2_LOG;
@@ -464,7 +467,7 @@ impl Quantizer {
         minc0: i32,
         minc1: i32,
         minc2: i32,
-        colorlist: &mut [u8],
+        colorlist: &mut [u8; MAXNUMCOLORS],
     ) -> usize {
         let numcolors = self.palette.colors_total;
 
@@ -475,8 +478,11 @@ impl Quantizer {
         let maxc2 = minc2 + ((1 << BOX_C2_SHIFT) - (1 << C2_SHIFT));
         let centerc2 = (minc2 + maxc2) >> 1;
 
-        let mut mindist = vec![0i64; MAXNUMCOLORS];
-        let mut minmaxdist: i64 = i64::MAX;
+        // A weighted squared distance never exceeds (255 * 3)^2 * 3, so the
+        // whole computation fits in an i32 - half the traffic of the i64 it
+        // used to run in, and a min-reduce the compiler can vectorize.
+        let mut mindist = [0i32; MAXNUMCOLORS];
+        let mut minmaxdist: i32 = i32::MAX;
 
         for i in 0..numcolors {
             let x0 = self.palette.red[i] as i32;
@@ -515,25 +521,21 @@ impl Quantizer {
         maxc: i32,
         centerc: i32,
         scale: i32,
-    ) -> (i64, i64) {
+    ) -> (i32, i32) {
         if x < minc {
-            let tdist = (x - minc) as i64 * scale as i64;
+            let tdist = (x - minc) * scale;
             let min_dist = tdist * tdist;
-            let tdist = (x - maxc) as i64 * scale as i64;
+            let tdist = (x - maxc) * scale;
             let max_dist = tdist * tdist;
             (min_dist, max_dist)
         } else if x > maxc {
-            let tdist = (x - maxc) as i64 * scale as i64;
+            let tdist = (x - maxc) * scale;
             let min_dist = tdist * tdist;
-            let tdist = (x - minc) as i64 * scale as i64;
+            let tdist = (x - minc) * scale;
             let max_dist = tdist * tdist;
             (min_dist, max_dist)
         } else {
-            let tdist = if x <= centerc {
-                (x - maxc) as i64 * scale as i64
-            } else {
-                (x - minc) as i64 * scale as i64
-            };
+            let tdist = if x <= centerc { (x - maxc) * scale } else { (x - minc) * scale };
             (0, tdist * tdist)
         }
     }
@@ -544,26 +546,31 @@ impl Quantizer {
         minc1: i32,
         minc2: i32,
         numcolors: usize,
-        colorlist: &[u8],
-        bestcolor: &mut [u8],
+        colorlist: &[u8; MAXNUMCOLORS],
+        bestcolor: &mut [u8; BOX_ELEMS],
     ) {
-        let mut bestdist = vec![i64::MAX; BOX_C0_ELEMS * BOX_C1_ELEMS * BOX_C2_ELEMS];
+        // Same i32 range argument as `find_nearby_colors`. Keeping the winning
+        // color as an i32 next to the distance lets the compare-and-select run
+        // on two same-width lanes instead of mixing an i64 compare with a byte
+        // store; it is narrowed back to u8 once, at the end.
+        let mut bestdist = [i32::MAX; BOX_ELEMS];
+        let mut bestindex = [0i32; BOX_ELEMS];
 
-        const STEP_C0: i64 = ((1 << C0_SHIFT) * C0_SCALE) as i64;
-        const STEP_C1: i64 = ((1 << C1_SHIFT) * C1_SCALE) as i64;
-        const STEP_C2: i64 = ((1 << C2_SHIFT) * C2_SCALE) as i64;
+        const STEP_C0: i32 = ((1 << C0_SHIFT) * C0_SCALE) as i32;
+        const STEP_C1: i32 = ((1 << C1_SHIFT) * C1_SCALE) as i32;
+        const STEP_C2: i32 = ((1 << C2_SHIFT) * C2_SCALE) as i32;
 
         for i in 0..numcolors {
-            let icolor = colorlist[i] as usize;
-            let r = self.palette.red[icolor] as i32;
-            let g = self.palette.green[icolor] as i32;
-            let b = self.palette.blue[icolor] as i32;
+            let icolor = colorlist[i] as i32;
+            let r = self.palette.red[icolor as usize] as i32;
+            let g = self.palette.green[icolor as usize] as i32;
+            let b = self.palette.blue[icolor as usize] as i32;
 
-            let mut inc0 = (minc0 - r) as i64 * C0_SCALE as i64;
+            let mut inc0 = (minc0 - r) * C0_SCALE;
             let mut dist0 = inc0 * inc0;
-            let mut inc1 = (minc1 - g) as i64 * C1_SCALE as i64;
+            let mut inc1 = (minc1 - g) * C1_SCALE;
             dist0 += inc1 * inc1;
-            let mut inc2 = (minc2 - b) as i64 * C2_SCALE as i64;
+            let mut inc2 = (minc2 - b) * C2_SCALE;
             dist0 += inc2 * inc2;
 
             inc0 = inc0 * (2 * STEP_C0) + STEP_C0 * STEP_C0;
@@ -582,9 +589,10 @@ impl Quantizer {
                     let mut xx2 = inc2;
 
                     for _ic2 in 0..BOX_C2_ELEMS {
-                        if dist2 < bestdist[bptr_idx] {
+                        let closer = dist2 < bestdist[bptr_idx];
+                        if closer {
                             bestdist[bptr_idx] = dist2;
-                            bestcolor[bptr_idx] = icolor as u8;
+                            bestindex[bptr_idx] = icolor;
                         }
                         dist2 += xx2;
                         xx2 += 2 * STEP_C2 * STEP_C2;
@@ -597,11 +605,18 @@ impl Quantizer {
                 xx0 += 2 * STEP_C0 * STEP_C0;
             }
         }
+
+        for (out, &best) in bestcolor.iter_mut().zip(bestindex.iter()) {
+            *out = best as u8;
+        }
     }
 
     fn fill_inverse_cmap(&mut self, c0: i32, c1: i32, c2: i32) {
-        let mut colorlist = vec![0u8; MAXNUMCOLORS];
-        let mut bestcolor = vec![0u8; BOX_C0_ELEMS * BOX_C1_ELEMS * BOX_C2_ELEMS];
+        // These are small, fixed-size and dead by the end of the call, so they
+        // live on the stack. Heap-allocating and zeroing them on every call
+        // was pure overhead on the cold-cache path.
+        let mut colorlist = [0u8; MAXNUMCOLORS];
+        let mut bestcolor = [0u8; BOX_ELEMS];
 
         let bc0 = c0 >> BOX_C0_LOG as i32;
         let bc1 = c1 >> BOX_C1_LOG as i32;
