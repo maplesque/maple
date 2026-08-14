@@ -206,27 +206,44 @@ impl Quantizer {
         let mut occupied_c2max = original.c2min;
         let mut colorcount = 0;
 
-        let c2min = original.c2min as usize;
         let c2_len = (original.c2max - original.c2min + 1) as usize;
 
         for c0 in original.c0min..=original.c0max {
             for c1 in original.c1min..=original.c1max {
-                let row_start = Self::histogram_index(c0 as usize, c1 as usize, c2min);
+                let row_start =
+                    Self::histogram_index(c0 as usize, c1 as usize, original.c2min as usize);
                 let row = &self.histogram[row_start..row_start + c2_len];
 
-                for (c2_offset, &count) in row.iter().enumerate() {
-                    if count == 0 {
-                        continue;
-                    }
+                // Counting the occupied cells is the whole hot loop of the
+                // palette build, so it stays a plain reduction the compiler can
+                // vectorize. Widening the six bounds cell by cell instead chains
+                // as many dependent min/max on every occupied cell, which is
+                // what made this scan slower than the passes it replaced.
+                let occupied = row.iter().filter(|&&count| count != 0).count();
+                if occupied == 0 {
+                    continue;
+                }
+                colorcount += occupied as i64;
 
-                    let c2 = original.c2min + c2_offset as i32;
-                    occupied_c0min = occupied_c0min.min(c0);
-                    occupied_c0max = occupied_c0max.max(c0);
-                    occupied_c1min = occupied_c1min.min(c1);
-                    occupied_c1max = occupied_c1max.max(c1);
-                    occupied_c2min = occupied_c2min.min(c2);
-                    occupied_c2max = occupied_c2max.max(c2);
-                    colorcount += 1;
+                // A row contributes the same c0/c1 whatever its occupancy, so
+                // those bounds only have to be widened once per non-empty row.
+                occupied_c0min = occupied_c0min.min(c0);
+                occupied_c0max = occupied_c0max.max(c0);
+                occupied_c1min = occupied_c1min.min(c1);
+                occupied_c1max = occupied_c1max.max(c1);
+
+                // Only the first and last occupied cell of the row can move the
+                // c2 bounds, and neither is worth looking for once the bound
+                // already reaches the edge of the box.
+                if occupied_c2min > original.c2min {
+                    if let Some(first) = row.iter().position(|&count| count != 0) {
+                        occupied_c2min = occupied_c2min.min(original.c2min + first as i32);
+                    }
+                }
+                if occupied_c2max < original.c2max {
+                    if let Some(last) = row.iter().rposition(|&count| count != 0) {
+                        occupied_c2max = occupied_c2max.max(original.c2min + last as i32);
+                    }
                 }
             }
         }
