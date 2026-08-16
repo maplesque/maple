@@ -120,12 +120,14 @@ Good to know: `renders.auto_zoom()` scales inputs up to fill the mapped area (re
 
 ### GIF
 
-[`GifAnim`](https://docs.rs/maple-render-core/latest/maple_render_core/gif_anim/struct.GifAnim.html) turns a `Renders` into an animated GIF. GIFs only have 256 colors, so the frames get quantized against a palette. Which frames feed that palette is up to the template, frame 0 by default, whatever `Repository::get_palette()` says if you set it:
+[`GifAnim`](https://docs.rs/maple-render-core/latest/maple_render_core/gif_anim/struct.GifAnim.html) turns a `Renders` into an animated GIF. GIFs only have 256 colors, so the frames get quantized against a palette. By default the palette frames and per-frame timing come from the template itself (`Repository::get_palette()`, `get_period()`, `get_hold()`); call `set_palette_frames`/`set_timing` only when you want to override them:
 
 ```rust
 use maple_render_core::GifAnim;
 
 let mut gif = GifAnim::new(renders);
+// The template's own palette and timing apply automatically; these just
+// override them:
 gif.set_palette_frames(vec![0]); // quantize against frame 0
 gif.set_timing(0.1, 5.0); // seconds per frame, extra hold on the last
 gif.set_dither(true); // slower but smoother gradients

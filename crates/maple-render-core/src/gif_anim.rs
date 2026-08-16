@@ -15,9 +15,13 @@ use crate::{
 
 pub struct GifAnim {
     renders: Renders,
-    palette_frames: Vec<i32>,
-    period: f64,
-    hold: f64,
+    /// Explicit palette frames set by the caller. When `None`, the template's
+    /// own palette (from `template.json`) is used.
+    palette_frames: Option<Vec<i32>>,
+    /// Explicit timing set by the caller. When `None`, the template's own
+    /// delay/hold (from `template.json`) is used.
+    period: Option<f64>,
+    hold: Option<f64>,
     first_frame: i32,
     blocks: Vec<GifBlock>,
     palette: Option<Palette>,
@@ -35,9 +39,9 @@ impl GifAnim {
     pub fn new(renders: Renders) -> Self {
         GifAnim {
             renders,
-            palette_frames: vec![0],
-            period: 0.1,
-            hold: 5.0,
+            palette_frames: None,
+            period: None,
+            hold: None,
             first_frame: -1,
             blocks: Vec::new(),
             palette: None,
@@ -50,11 +54,11 @@ impl GifAnim {
     }
 
     pub fn set_palette(&mut self, index: i32) {
-        self.palette_frames = vec![index];
+        self.palette_frames = Some(vec![index]);
     }
 
     pub fn set_palette_frames(&mut self, frames: Vec<i32>) {
-        self.palette_frames = frames;
+        self.palette_frames = Some(frames);
     }
 
     pub fn set_first_frame(&mut self, index: i32) {
@@ -62,15 +66,20 @@ impl GifAnim {
     }
 
     pub fn set_timing(&mut self, period: f64, hold: f64) {
-        self.period = period;
-        self.hold = hold;
+        self.period = Some(period);
+        self.hold = Some(hold);
     }
 
     pub fn apply(&mut self) -> Result<()> {
-        let step = (self.period * 100.0 + 0.5) as u16;
-        let last_step = (self.hold * 100.0 + 0.5) as u16;
+        let palette_frames =
+            self.palette_frames.clone().unwrap_or_else(|| self.renders.repo().get_palette());
+        let period = self.period.unwrap_or_else(|| self.renders.repo().get_period());
+        let hold = self.hold.unwrap_or_else(|| self.renders.repo().get_hold());
 
-        let pals = self.palette_frames.len();
+        let step = (period * 100.0 + 0.5) as u16;
+        let last_step = (hold * 100.0 + 0.5) as u16;
+
+        let pals = palette_frames.len();
         if pals < 1 {
             return Err(Error::MissingData("No palette frames specified".to_string()));
         }
@@ -78,7 +87,7 @@ impl GifAnim {
         let mut pal_image: Option<RgbaImage> = None;
         let mut pal_index: i32 = -1;
 
-        for (i, &idx) in self.palette_frames.iter().enumerate() {
+        for (i, &idx) in palette_frames.iter().enumerate() {
             if pals == 1 {
                 let render = self.renders.get_render(idx)?;
                 pal_image = Some(render.get().clone());
